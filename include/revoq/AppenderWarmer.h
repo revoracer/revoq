@@ -1,0 +1,370 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
+#pragma once
+
+#include <array>
+#include <atomic>
+#include <condition_variable>
+#include <cstring>
+#include <memory>
+#include <mutex>
+#include <pthread.h>
+#include <sched.h>
+#include <stdexcept>
+#include <thread>
+#include <unistd.h>
+
+#include "CpuAffinity.h"
+#include "Frame.h"
+#include "MmapBuffer.h"
+#include "RealtimePriority.h"
+#include "Segment.h"
+#include "StreamBase.h"
+#include "TimeUtils.h"
+#include "detail/StreamPlatform.h"
+#include "portable_intrinsics.h"
+
+#include <spdlog/spdlog.h>
+
+namespace racer::revoq {
+
+template <size_t RingSize = 16> class AppenderWarmer {
+public:
+  static_assert((RingSize & (RingSize - 1)) == 0,
+                "RingSize must be power of 2");
+
+  struct SegmentSlot {
+    std::atomic<int64_t> segment_id{-1};
+    std::uintptr_t address{0};
+    std::size_t size{0};
+    std::atomic<uint64_t> sequence{0};
+    bool is_owned{false};
+    char padding[64 - sizeof(std::atomic<int64_t>) - sizeof(std::uintptr_t) -
+                 sizeof(std::size_t) - sizeof(std::atomic<uint64_t>) -
+                 sizeof(bool)]{};
+  } __attribute__((aligned(64)));
+
+  AppenderWarmer(LocationPtr location, uint32_t dest_id, size_t segment_size,
+                 bool is_appender, int warmer_cpu_core = -1,
+                 size_t warmup_distance = 1)
+      : location_(std::move(location)), dest_id_(dest_id),
+        segment_size_(segment_size), is_appender_(is_appender),
+        warmer_cpu_core_(warmer_cpu_core),
+        warmup_distance_(std::min(warmup_distance, RingSize / 2)),
+        running_(false), write_index_(0), read_index_(0), current_segment_(-1) {
+    SPDLOG_INFO("AppenderWarmer created for {}/{:08x} ({}) - ring size: {}",
+                location_->uname, dest_id_,
+                is_appender_ ? "APPENDER" : "CURSOR", RingSize);
+  }
+
+  ~AppenderWarmer() {
+    stop();
+    releaseAllSegments();
+  }
+
+  void start() {
+    if (running_.exchange(true, std::memory_order_acquire)) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(wake_mutex_);
+      config_ready_ = false;
+    }
+    warmer_thread_ = std::thread(&AppenderWarmer::warmupLoop, this);
+
+    {
+      std::unique_lock<std::mutex> lock(wake_mutex_);
+      wake_cv_.wait(lock, [this] { return config_ready_; });
+    }
+    SPDLOG_INFO("AppenderWarmer started");
+  }
+
+  void stop() {
+
+    if (detail::stopAndJoin(running_, wake_mutex_, wake_cv_, warmer_thread_)) {
+      SPDLOG_INFO("AppenderWarmer stopped");
+    }
+  }
+
+  __attribute__((always_inline)) inline std::uintptr_t
+  getWarmedSegment(int64_t segment_id, std::size_t &size_out) {
+    const uint64_t start_read = read_index_.load(std::memory_order_acquire);
+    for (size_t i = 0; i < RingSize; ++i) {
+      const size_t idx = (start_read + i) & (RingSize - 1);
+      SegmentSlot &slot = ring_[idx];
+      int64_t slot_segment_id = slot.segment_id.load(std::memory_order_acquire);
+      if (slot_segment_id == segment_id) {
+
+        if (slot.segment_id.compare_exchange_strong(
+                slot_segment_id, -1, std::memory_order_acq_rel)) {
+          size_out = slot.size;
+          std::uintptr_t addr = slot.address;
+
+          slot.is_owned = false;
+
+          read_index_.store((idx + 1) & (RingSize - 1),
+                            std::memory_order_release);
+          return addr;
+        }
+      }
+    }
+    return 0;
+  }
+
+  inline void updateCurrentSegment(int64_t segment_id) {
+
+    current_segment_.store(segment_id, std::memory_order_release);
+
+    if (!dedicated_.load(std::memory_order_acquire)) {
+      std::lock_guard<std::mutex> lock(wake_mutex_);
+      wake_cv_.notify_one();
+    }
+  }
+
+  struct Stats {
+    size_t segments_in_ring;
+    uint64_t write_index;
+    uint64_t read_index;
+    int64_t current_segment;
+  };
+
+  Stats getStats() const {
+    Stats stats;
+    stats.write_index = write_index_.load(std::memory_order_relaxed);
+    stats.read_index = read_index_.load(std::memory_order_relaxed);
+    stats.current_segment = current_segment_.load(std::memory_order_relaxed);
+    stats.segments_in_ring = 0;
+    for (size_t i = 0; i < RingSize; ++i) {
+      if (ring_[i].segment_id.load(std::memory_order_relaxed) >= 0) {
+        ++stats.segments_in_ring;
+      }
+    }
+    return stats;
+  }
+
+private:
+  const LocationPtr location_;
+  const uint32_t dest_id_;
+  const size_t segment_size_;
+  const bool is_appender_;
+  const int warmer_cpu_core_;
+  const size_t warmup_distance_;
+
+  std::atomic<bool> dedicated_{false};
+
+  std::atomic<bool> running_;
+
+  alignas(64) std::atomic<uint64_t> write_index_{};
+  alignas(64) std::atomic<uint64_t> read_index_{};
+  alignas(64) std::atomic<int64_t> current_segment_{};
+
+  alignas(64) std::array<SegmentSlot, RingSize> ring_;
+
+  std::thread warmer_thread_;
+  std::mutex wake_mutex_;
+  std::condition_variable wake_cv_;
+
+  bool config_ready_{false};
+
+  void releaseAllSegments() {
+    for (size_t i = 0; i < RingSize; ++i) {
+      SegmentSlot &slot = ring_[i];
+      if (slot.is_owned && slot.address != 0) {
+        os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
+                                          os::MsyncMode::NONE);
+        slot.address = 0;
+        slot.is_owned = false;
+      }
+    }
+  }
+
+  template <class Pred> void warmerWait(Pred pred) {
+    if (dedicated_.load(std::memory_order_acquire)) {
+      while (running_.load(std::memory_order_acquire) && !pred())
+        PORTABLE_PAUSE();
+    } else {
+      std::unique_lock<std::mutex> lock(wake_mutex_);
+      wake_cv_.wait(lock, [&] {
+        return !running_.load(std::memory_order_acquire) || pred();
+      });
+    }
+  }
+
+  void warmupLoop() {
+
+    bool dedicated = false;
+    if (warmer_cpu_core_ >= 0) {
+      if (system::CpuAffinity::pinToCore(warmer_cpu_core_)) {
+        dedicated = true;
+        if (!system::RealtimePriority::setRealtimePriority(50))
+          SPDLOG_ERROR("warmer: failed to set RT priority");
+        else
+          SPDLOG_DEBUG("Warmer thread pinned to CPU {} with RT priority {}",
+                       warmer_cpu_core_, 50);
+      } else {
+        SPDLOG_ERROR("warmer: failed to pin to core {}; running parked "
+                     "(no RT/busy-poll)",
+                     warmer_cpu_core_);
+      }
+    }
+    {
+
+      std::lock_guard<std::mutex> lock(wake_mutex_);
+      dedicated_.store(dedicated, std::memory_order_release);
+      config_ready_ = true;
+    }
+    wake_cv_.notify_one();
+    SPDLOG_DEBUG("Warmer loop started");
+
+    warmerWait([this] {
+      return current_segment_.load(std::memory_order_acquire) >= 0;
+    });
+    uint64_t local_seq = 1;
+    while (running_.load(std::memory_order_acquire)) {
+      int64_t current_segment =
+          current_segment_.load(std::memory_order_acquire);
+      if (current_segment < 0) {
+        warmerWait([this] {
+          return current_segment_.load(std::memory_order_acquire) >= 0;
+        });
+        continue;
+      }
+      bool did_work = false;
+      for (size_t i = 1; i <= warmup_distance_; ++i) {
+        if (!running_.load(std::memory_order_acquire)) {
+          break;
+        }
+        int64_t next_segment_id = current_segment + static_cast<int64_t>(i);
+        if (isSegmentInRing(next_segment_id)) {
+          continue;
+        }
+        uint64_t write_idx = write_index_.load(std::memory_order_acquire);
+        size_t slot_idx = write_idx & (RingSize - 1);
+        SegmentSlot &slot = ring_[slot_idx];
+        int64_t expected = -1;
+
+        if (!slot.segment_id.compare_exchange_strong(
+                expected, -2, std::memory_order_acq_rel)) {
+          continue;
+        }
+        try {
+          warmSegmentIntoSlot(next_segment_id, slot, local_seq++);
+          did_work = true;
+          write_index_.fetch_add(1, std::memory_order_release);
+        } catch (const std::exception &e) {
+          SPDLOG_ERROR("Failed to warm segment {}: {}", next_segment_id,
+                       e.what());
+          slot.segment_id.store(-1, std::memory_order_release);
+        }
+      }
+      cleanupOldSegments(current_segment);
+      if (!did_work) {
+
+        warmerWait([this, current_segment] {
+          return current_segment_.load(std::memory_order_acquire) !=
+                 current_segment;
+        });
+      }
+    }
+    SPDLOG_DEBUG("Warmer loop exited");
+  }
+
+  [[nodiscard]] bool isSegmentInRing(int64_t segment_id) const {
+    for (size_t i = 0; i < RingSize; ++i) {
+      if (ring_[i].segment_id.load(std::memory_order_acquire) == segment_id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void warmSegmentIntoSlot(int64_t segment_id, SegmentSlot &slot,
+                           uint64_t seq) {
+    std::string segment_file =
+        Segment::getSegmentPath(location_, dest_id_,
+                                static_cast<int>(segment_id))
+            .string();
+    assert(!segment_file.empty());
+    const auto t0 = Timestamp::now();
+    const bool file_existed = std::filesystem::exists(segment_file);
+    SPDLOG_DEBUG("AppenderWarmer warming segment {} ({})", segment_id,
+                 segment_file);
+
+    std::uintptr_t addr = 0;
+    try {
+      addr = os::MmapBuffer::loadMmapBuffer(segment_file, segment_size_,
+                                            is_appender_, true);
+    } catch (...) {
+      if (is_appender_) {
+        std::error_code ec;
+        if (std::filesystem::exists(segment_file, ec) &&
+            std::filesystem::file_size(segment_file, ec) == 0) {
+
+          std::filesystem::remove(segment_file, ec);
+        }
+      }
+      throw;
+    }
+
+    if (is_appender_) {
+      auto *header = reinterpret_cast<SegmentHeader *>(addr);
+      if (!file_existed || header->last_frame_position == 0) {
+        header->version = SEGMENT_VERSION;
+        header->segment_header_length = sizeof(SegmentHeader);
+        header->segment_size = static_cast<uint32_t>(segment_size_);
+        header->frame_header_length = sizeof(FrameHeader);
+        header->last_frame_position = sizeof(SegmentHeader);
+
+        std::memset(reinterpret_cast<void *>(addr + sizeof(SegmentHeader)), 0,
+                    segment_size_ - sizeof(SegmentHeader));
+
+        std::atomic_thread_fence(std::memory_order_release);
+      } else if (header->version != SEGMENT_VERSION ||
+                 header->segment_header_length != sizeof(SegmentHeader) ||
+                 header->segment_size != static_cast<uint32_t>(segment_size_)) {
+        os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
+                                          os::MsyncMode::NONE);
+        throw std::runtime_error(
+            "existing warmed segment has invalid header: " + segment_file);
+      }
+    }
+    slot.address = addr;
+    slot.size = segment_size_;
+    slot.is_owned = true;
+    slot.sequence.store(seq, std::memory_order_release);
+    slot.segment_id.store(segment_id, std::memory_order_release);
+    const auto t1 = Timestamp::now();
+    SPDLOG_INFO("AppenderWarmer warmed segment {} in {:.3f} ms", segment_id,
+                static_cast<double>((t1 - t0).nsec()) / 1'000'000.0);
+    SPDLOG_TRACE("Warmed file-backed segment {} in {} ns", segment_id,
+                 (t1 - t0).nsec());
+  }
+
+  void cleanupOldSegments(int64_t current_segment) {
+
+    const int64_t cleanup_threshold =
+        current_segment - static_cast<int64_t>(RingSize);
+    for (size_t i = 0; i < RingSize; ++i) {
+      SegmentSlot &slot = ring_[i];
+      int64_t slot_segment_id = slot.segment_id.load(std::memory_order_acquire);
+      if (slot_segment_id >= 0 && slot_segment_id < cleanup_threshold) {
+
+        if (slot.segment_id.compare_exchange_strong(
+                slot_segment_id, -1, std::memory_order_acq_rel)) {
+
+          if (slot.is_owned && slot.address != 0) {
+            os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
+                                              os::MsyncMode::NONE);
+            slot.address = 0;
+            slot.is_owned = false;
+          }
+          SPDLOG_TRACE("Cleaned up old segment {} from ring", slot_segment_id);
+        }
+      }
+    }
+  }
+};
+
+using AppenderWarmerPtr = std::shared_ptr<AppenderWarmer<>>;
+
+} // namespace racer::revoq

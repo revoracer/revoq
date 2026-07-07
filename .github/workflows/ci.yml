@@ -1,0 +1,63 @@
+name: CI
+
+# Correctness only. These run on shared, virtualized GitHub-hosted runners,
+# which are fine for "does it build and do the tests pass" but are NOT a
+# latency environment. Performance numbers come from the tuned benchmark on an
+# isolated host (see docs/benchmarking.md), never from CI.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpp:
+    name: C++ build + tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Clang 20
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+
+      - name: Tool versions
+        run: CXX=/usr/bin/clang++-20 ./build.sh doctor
+
+      - name: Build and run C++ tests
+        run: |
+          sudo prlimit --memlock=unlimited:unlimited --pid $$
+          CXX=/usr/bin/clang++-20 ./build.sh test
+
+  python:
+    name: Python bindings + tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Clang 20
+        run: |
+          wget https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 20
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest
+        run: python3 -m pip install --upgrade pip pytest
+
+      - name: Build bindings and run Python tests
+        run: CXX=/usr/bin/clang++-20 PYTHON=python3 ./build.sh python
