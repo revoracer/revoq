@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
+//
+// Chronicle Queue OSS comparative driver. Kept out of the core CMake build on
+// purpose: this is a JVM project with its own toolchain. `run.sh` invokes
+// `gradle installDist` and then launches the producer/consumer processes.
+//
+// Chronicle Queue OSS only (net.openhft:chronicle-queue) — never Enterprise.
+// The exact resolved version is recorded at runtime as `system_version`
+// (Package.getImplementationVersion), not just the value pinned here.
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Override with -PchronicleVersion=<a currently published OSS GA> if the pin
+// below has been superseded. The value is only a starting point; the run
+// records whatever actually resolved.
+ext.chronicleVersion = project.findProperty('chronicleVersion') ?: '2026.5'
+
+dependencies {
+    implementation "net.openhft:chronicle-queue:${chronicleVersion}"
+    implementation 'org.hdrhistogram:HdrHistogram:2.2.2'
+}
+
+application {
+    mainClass = 'racer.revoq.bench.ChronicleBench'
+    applicationName = 'chronicle-bench'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}

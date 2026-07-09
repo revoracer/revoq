@@ -248,9 +248,16 @@ private:
           continue;
         }
         try {
-          warmSegmentIntoSlot(next_segment_id, slot, local_seq++);
-          did_work = true;
-          write_index_.fetch_add(1, std::memory_order_release);
+          if (warmSegmentIntoSlot(next_segment_id, slot, local_seq++)) {
+            did_work = true;
+            write_index_.fetch_add(1, std::memory_order_release);
+          } else {
+
+            slot.segment_id.store(-1, std::memory_order_release);
+            SPDLOG_DEBUG("Skipped stale warm of segment {} (appender already "
+                         "owns it)",
+                         next_segment_id);
+          }
         } catch (const std::exception &e) {
           SPDLOG_ERROR("Failed to warm segment {}: {}", next_segment_id,
                        e.what());
@@ -278,7 +285,7 @@ private:
     return false;
   }
 
-  void warmSegmentIntoSlot(int64_t segment_id, SegmentSlot &slot,
+  bool warmSegmentIntoSlot(int64_t segment_id, SegmentSlot &slot,
                            uint64_t seq) {
     std::string segment_file =
         Segment::getSegmentPath(location_, dest_id_,
@@ -292,8 +299,12 @@ private:
 
     std::uintptr_t addr = 0;
     try {
-      addr = os::MmapBuffer::loadMmapBuffer(segment_file, segment_size_,
-                                            is_appender_, true);
+      addr = os::MmapBuffer::loadMmapBuffer(
+          segment_file, segment_size_,
+          is_appender_,
+          true,
+
+          false);
     } catch (...) {
       if (is_appender_) {
         std::error_code ec;
@@ -307,6 +318,12 @@ private:
     }
 
     if (is_appender_) {
+
+      if (segment_id <= current_segment_.load(std::memory_order_acquire)) {
+        os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
+                                          os::MsyncMode::NONE);
+        return false;
+      }
       auto *header = reinterpret_cast<SegmentHeader *>(addr);
       if (!file_existed || header->last_frame_position == 0) {
         header->version = SEGMENT_VERSION;
@@ -338,6 +355,7 @@ private:
                 static_cast<double>((t1 - t0).nsec()) / 1'000'000.0);
     SPDLOG_TRACE("Warmed file-backed segment {} in {} ns", segment_id,
                  (t1 - t0).nsec());
+    return true;
   }
 
   void cleanupOldSegments(int64_t current_segment) {
@@ -367,4 +385,4 @@ private:
 
 using AppenderWarmerPtr = std::shared_ptr<AppenderWarmer<>>;
 
-} // namespace racer::revoq
+}

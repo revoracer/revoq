@@ -33,6 +33,7 @@
 namespace racer {
 class TscTimer {
 public:
+
   static void calibrate() {
     if (!is_suitable_for_cross_core_timing()) {
       throw std::runtime_error(
@@ -109,6 +110,18 @@ public:
 
   static inline double delta_us(uint64_t start, uint64_t end) noexcept {
     return delta_ns(start, end) / 1000.0;
+  }
+
+  static inline double ns_to_cycles(double ns) noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+    const double tpn = ticks_per_ns_.load(std::memory_order_relaxed);
+    return ns * (tpn > 0.0 ? tpn : 1.0);
+#elif defined(__APPLE__) && defined(__aarch64__)
+    const double tb = mach_timebase();
+    return ns / (tb > 0.0 ? tb : 1.0);
+#else
+    return ns;
+#endif
   }
 
   static bool is_suitable_for_cross_core_timing() noexcept {
@@ -199,6 +212,7 @@ public:
   }
 
 private:
+
   static bool has_invariant_tsc() noexcept {
 #if defined(__x86_64__) || defined(_M_X64)
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;

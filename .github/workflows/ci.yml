@@ -38,6 +38,12 @@ jobs:
           sudo prlimit --memlock=unlimited:unlimited --pid $$
           CXX=/usr/bin/clang++-20 ./build.sh test
 
+      # Compile-only: catches benchmark/HdrHistogram build breakage that the
+      # test build never touches. CI never *runs* the benchmark for numbers —
+      # those come from a tuned isolated host (see docs/benchmarking.md).
+      - name: Build benchmark targets (compile only)
+        run: CXX=/usr/bin/clang++-20 ./build.sh benchmarks
+
   python:
     name: Python bindings + tests
     runs-on: ubuntu-24.04
@@ -61,3 +67,37 @@ jobs:
 
       - name: Build bindings and run Python tests
         run: CXX=/usr/bin/clang++-20 PYTHON=python3 ./build.sh python
+
+  # Schema + edition + chartability check for committed comparative artifacts.
+  # Pure-Python, no JVM and no load generator — validates the JSON already
+  # committed under results/, never runs the Aeron/Chronicle drivers (see
+  # comparative/README.md).
+  #
+  # This is NOT a full publish gate: it does not enforce the workload.md publish
+  # minimum (>= 5M messages/point) or reject dirty (uncommitted-source) versions,
+  # so exploratory runs (e.g. the 1M comprehensive sweep) intentionally pass.
+  # Publish-worthiness is asserted by a run's own README, not by this job.
+  comparative-results:
+    name: Validate comparative result JSON (schema/OSS)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate every committed results dir (schema + --require-oss)
+        run: |
+          validator=benchmarks/comparative/harness/validate_results.py
+          shopt -s nullglob
+          found=0
+          for dir in benchmarks/comparative/results/*/; do
+            [ -f "$dir/env.json" ] || continue   # skip provenance-less scratch dirs
+            found=1
+            echo "== validating $dir =="
+            python3 "$validator" --require-oss "$dir"
+          done
+          if [ "$found" = 0 ]; then
+            echo "No committed results dir with env.json yet — nothing to validate."
+          fi

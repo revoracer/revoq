@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
+//
+// Aeron OSS comparative drivers (IPC + Archive). Kept out of the core CMake
+// build on purpose: this is a JVM project with its own toolchain. `run_ipc.sh`
+// and `run_archive.sh` invoke `gradle installDist` and then launch the
+// MediaDriver / ArchivingMediaDriver plus producer/consumer processes.
+//
+// Aeron OSS only (io.aeron) — never Premium/Cluster. `aeron-all` is the OSS
+// convenience artifact bundling the driver, client, archive, and agrona. The
+// exact resolved version is recorded at runtime as `system_version`
+// (Package.getImplementationVersion), not just the value pinned here.
+plugins {
+    id 'application'
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Override with -PaeronVersion=<a currently published OSS GA> if the pin below
+// has been superseded. The value is only a starting point; the run records
+// whatever actually resolved.
+ext.aeronVersion = project.findProperty('aeronVersion') ?: '1.44.1'
+
+dependencies {
+    implementation "io.aeron:aeron-all:${aeronVersion}"
+    implementation 'org.hdrhistogram:HdrHistogram:2.2.2'
+}
+
+// The run scripts launch by explicit `-cp`, so mainClass only names the default
+// generated start script; both AeronIpcBench and AeronArchiveBench ship in the
+// installDist lib/ classpath.
+application {
+    mainClass = 'racer.revoq.bench.AeronIpcBench'
+    applicationName = 'aeron-bench'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}

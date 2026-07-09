@@ -125,8 +125,23 @@ if(REVOQ_BUILD_EXAMPLES)
 endif()
 
 if(REVOQ_BUILD_BENCHMARKS)
+    # HdrHistogram-C provides the lossless, industry-standard latency histogram
+    # encoding (base64 "V2") that the p99 benchmark emits, so its output is
+    # directly comparable with Chronicle/Aeron in benchmarks/comparative/.
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/HdrHistogram_c/CMakeLists.txt")
+        message(FATAL_ERROR "Missing external/HdrHistogram_c. Run: git submodule update --init --recursive")
+    endif()
+    set(HDR_HISTOGRAM_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(HDR_HISTOGRAM_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(HDR_HISTOGRAM_INSTALL_SHARED OFF CACHE BOOL "" FORCE)
+    set(HDR_HISTOGRAM_INSTALL_STATIC OFF CACHE BOOL "" FORCE)
+    add_subdirectory(external/HdrHistogram_c EXCLUDE_FROM_ALL)
+
+    # Only the revoq-only micro/regression benchmarks are part of the core build.
+    # benchmarks/comparative/ carries cross-system (JVM) drivers with their own
+    # toolchains and is intentionally excluded from CMake.
     file(GLOB REVOQ_BENCHMARK_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/micro/*.cpp"
     )
 
     foreach(benchmark_source IN LISTS REVOQ_BENCHMARK_SOURCES)
@@ -135,9 +150,16 @@ if(REVOQ_BUILD_BENCHMARKS)
         target_link_libraries("revoq_benchmark_${benchmark_name}" PRIVATE revoq::revoq)
         target_include_directories("revoq_benchmark_${benchmark_name}"
             PRIVATE
-                "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks"
+                "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/micro"
         )
     endforeach()
+
+    # Only the latency benchmark records an HdrHistogram; keep the dependency off
+    # the throughput binaries.
+    if(TARGET revoq_benchmark_stream_handler_benchmark_p99)
+        target_link_libraries(revoq_benchmark_stream_handler_benchmark_p99
+            PRIVATE hdr_histogram_static)
+    endif()
 endif()
 
 if(REVOQ_BUILD_PYTHON)

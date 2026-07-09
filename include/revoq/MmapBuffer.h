@@ -24,9 +24,11 @@ struct ReadOnlyMmapOptions {
 
 class MmapBuffer {
 public:
+
   static std::uintptr_t loadMmapBuffer(const std::string &path,
                                        std::size_t size, bool is_writing,
-                                       bool prefault);
+                                       bool prefault,
+                                       bool zero_new_file = true);
   static std::uintptr_t
   loadExistingReadOnlyMmapBuffer(const std::string &path, std::size_t size,
                                  ReadOnlyMmapOptions options = {});
@@ -38,5 +40,5 @@ public:
                                 bool prefault,
                                 MsyncMode msync_mode = MsyncMode::SYNC);
 };
-} // namespace os
-} // namespace racer
+}
+}

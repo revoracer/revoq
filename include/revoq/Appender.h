@@ -376,6 +376,8 @@ private:
         current_segment_id_.fetch_add(1, std::memory_order_relaxed) + 1;
     SegmentPtr next_segment;
     if (appender_warmer_) {
+
+      appender_warmer_->updateCurrentSegment(new_segment_id);
       size_t warmed_size = 0;
       std::uintptr_t warmed_addr =
           appender_warmer_->getWarmedSegment(new_segment_id, warmed_size);
@@ -388,7 +390,6 @@ private:
             Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
         SPDLOG_TRACE("Created segment {} (not pre-warmed)", new_segment_id);
       }
-      appender_warmer_->updateCurrentSegment(new_segment_id);
     } else {
       SPDLOG_INFO("No warmer - load segment normally");
       next_segment =
@@ -430,7 +431,9 @@ private:
             std::lock_guard<std::mutex> lock(retire_mutex_);
             retire_queue_.push_back(std::move(old_segment));
           }
+
         }
+
       }
     }
 

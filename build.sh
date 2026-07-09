@@ -157,11 +157,13 @@ done
 cd "${ROOT_DIR}"
 
 mkdir -p external
-git submodule update --init --recursive \
-  external/fmt \
-  external/spdlog \
-  external/Catch2 \
-  external/pybind11
+submodules=(external/fmt external/spdlog external/Catch2 external/pybind11)
+# The benchmarks link HdrHistogram-C (CMakeLists.txt hard-fails without it), so
+# fetch it too when benchmarks are in the build.
+if [[ "${BUILD_BENCHMARKS}" == "ON" ]]; then
+  submodules+=(external/HdrHistogram_c)
+fi
+git submodule update --init --recursive "${submodules[@]}"
 
 cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \

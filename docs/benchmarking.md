@@ -88,13 +88,18 @@ role names shown above.
 
 The latency benchmark reports latency in nanoseconds:
 
-- `p50_ns`, `p90_ns`, `p99_ns`, `p999_ns`
+- `p50_ns`, `p90_ns`, `p99_ns`, `p999_ns`, `p9999_ns`, `p99999_ns`
 - `max_ns`
 - `mean_ns`
+- `achieved_mps` (sustained producer rate over the measured window)
 - sample count and checksum
+- `latency_hdr_b64` — a lossless HdrHistogram (base64 V2) encoding of the full
+  distribution, so percentiles can be re-derived and results stay comparable
+  with the Chronicle/Aeron drivers in `benchmarks/comparative/`
 
 The measurement is appender timestamp to cursor handler endpoint for a
-deterministic mix of four 32-byte message payloads.
+deterministic message stream at a payload size selected by `--payload-bytes`
+(32, 64, 256, or 1024 bytes; default 32, uniform within a run).
 
 The throughput benchmarks print aligned tables with `Mmsg/s`, `ns/msg`, and a
 checksum so automated runs can detect broken loops. The dispatch-overhead

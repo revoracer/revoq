@@ -3,8 +3,13 @@
 // Minimal application-path latency benchmark for revoq journal dispatch.
 //
 // This public benchmark uses portable defaults rather than machine-specific
-// tuning. It measures the path from appender timestamp to cursor handler endpoint
-// using a deterministic mix of small fixed-size messages.
+// tuning. It measures the path from a message's intended send time to the
+// cursor handler endpoint using a deterministic mix of small fixed-size
+// messages. When paced (--interval-ns > 0) the frame timestamp is the message's
+// scheduled departure time, not the moment it actually left, so producer stalls
+// are reflected in the tail (i.e. free of coordinated omission). Unpaced runs
+// (--interval-ns 0) stamp the actual send time and should be read as
+// throughput/saturation runs, not latency percentiles.
 
 #include <algorithm>
 #include <array>
@@ -39,6 +44,9 @@
 #include <fmt/format.h>
 #include <spdlog/spdlog.h>
 
+#include <hdr/hdr_histogram.h>
+#include <hdr/hdr_histogram_log.h>
+
 #include <revoq/CpuAffinity.h>
 #include <revoq/StreamBase.h>
 #include <revoq/Frame.h>
@@ -64,20 +72,45 @@ constexpr std::uint64_t kDefaultIntervalNs = 1'000;
 constexpr std::size_t kTunedAppenderWarmupSegments = 8;
 constexpr std::size_t kTunedAppenderRetainedSegments = 10;
 
-template <std::uint64_t Tag> struct BenchMessage {
+// A benchmark message is a 32-byte header of hot fields plus optional padding to
+// reach the requested wire size. Tag gives the four message kinds distinct C++
+// types so the typed dispatch is a real 4-way switch; Bytes selects the payload
+// size (uniform within a run). [[no_unique_address]] collapses the empty pad so
+// the 32-byte case stays exactly 32 bytes.
+constexpr std::size_t kBenchHeaderBytes = 32;
+
+template <std::uint64_t Tag, std::size_t Bytes> struct BenchMessage {
+  static_assert(Bytes > kBenchHeaderBytes && Bytes % 8 == 0,
+                "payload bytes must be >= 32 and 8-byte aligned");
+  std::uint64_t sequence;
+  std::uint64_t value0;
+  std::uint64_t value1;
+  std::uint64_t value2;
+  unsigned char pad[Bytes - kBenchHeaderBytes];
+};
+
+// The 32-byte case has no padding, so specialize it away (a zero-length array is
+// not standard C++ and an empty std::array is not guaranteed to occupy no space).
+template <std::uint64_t Tag> struct BenchMessage<Tag, kBenchHeaderBytes> {
   std::uint64_t sequence;
   std::uint64_t value0;
   std::uint64_t value1;
   std::uint64_t value2;
 };
 
-using TradeMessage = BenchMessage<0>;
-using MarketDepth20Message = BenchMessage<1>;
-using BboMessage = BenchMessage<2>;
-using BookResetMessage = BenchMessage<3>;
+// Supported payload sizes for --payload-bytes. Each maps to a compile-time
+// instantiation of the write/read paths.
+inline constexpr std::array<std::size_t, 4> kSupportedPayloadBytes{32, 64, 256,
+                                                                   1024};
+
+using TradeMessage = BenchMessage<0, 32>;
 
 static_assert(sizeof(TradeMessage) == 32);
+static_assert(sizeof(BenchMessage<0, 64>) == 64);
+static_assert(sizeof(BenchMessage<0, 256>) == 256);
+static_assert(sizeof(BenchMessage<0, 1024>) == 1024);
 static_assert(std::is_trivially_copyable_v<TradeMessage>);
+static_assert(std::is_trivially_copyable_v<BenchMessage<0, 1024>>);
 static_assert(framePhysicalLength(sizeof(FrameHeader) + sizeof(TradeMessage)) ==
               FRAME_ALIGNMENT);
 
@@ -85,6 +118,7 @@ struct BenchmarkConfig {
   std::uint64_t messages{kDefaultMessages};
   std::uint64_t warmup_messages{kDefaultWarmupMessages};
   std::uint64_t interval_ns{kDefaultIntervalNs};
+  std::size_t payload_bytes{kBenchHeaderBytes};
   std::filesystem::path path;
   bool keep_files{false};
   bool path_set{false};
@@ -104,6 +138,8 @@ struct LatencyStats {
   std::int64_t p90_ns{0};
   std::int64_t p99_ns{0};
   std::int64_t p999_ns{0};
+  std::int64_t p9999_ns{0};
+  std::int64_t p99999_ns{0};
   std::int64_t max_ns{0};
   double mean_ns{0.0};
 };
@@ -114,6 +150,16 @@ struct BenchmarkResult {
   std::uint64_t checksum{0};
 };
 static_assert(std::is_trivially_copyable_v<BenchmarkResult>);
+
+// BenchmarkResult is trivially copyable because it is memcpy'd across the
+// fork-cursor pipe. The HdrHistogram encoding is variable length, so it travels
+// alongside the result rather than inside it (streamed length-prefixed over the
+// pipe in the forked path).
+struct BenchmarkOutput {
+  BenchmarkResult result;
+  std::string hdr_b64;
+  double achieved_mps{0.0}; // producer's sustained rate over the measured window
+};
 
 std::filesystem::path defaultPath() {
   const char *tmpdir = std::getenv("TMPDIR");
@@ -186,6 +232,9 @@ void printUsage(const char *exe) {
              "Use --interval-ns 0 for an unpaced appender. The default path is "
              "a temporary directory under /tmp.\n");
   fmt::print(stderr,
+             "Use --payload-bytes N (32, 64, 256, or 1024; default 32) to set "
+             "the message wire size.\n");
+  fmt::print(stderr,
              "Tuned mode requires Linux, a hugetlbfs --path, four explicit "
              "CPU assignments, and usually root or CAP_SYS_NICE.\n");
 }
@@ -230,6 +279,19 @@ BenchmarkConfig parseArgs(int argc, char **argv) {
       cfg.interval_ns =
           parseU64(readOptionValue(arg, "--interval-ns", argc, argv, i),
                    "--interval-ns");
+      continue;
+    }
+    if (optionMatches(arg, "--payload-bytes")) {
+      const auto requested = static_cast<std::size_t>(parseU64(
+          readOptionValue(arg, "--payload-bytes", argc, argv, i),
+          "--payload-bytes"));
+      if (std::find(kSupportedPayloadBytes.begin(),
+                    kSupportedPayloadBytes.end(),
+                    requested) == kSupportedPayloadBytes.end()) {
+        throw std::invalid_argument(
+            "--payload-bytes must be one of 32, 64, 256, 1024");
+      }
+      cfg.payload_bytes = requested;
       continue;
     }
     if (optionMatches(arg, "--path")) {
@@ -403,23 +465,47 @@ void writeTypedFrame(Appender<> &appender, std::int64_t gen_time,
   appender.closeData<T>();
 }
 
-void writeFrame(Appender<> &appender, std::uint64_t sequence) {
+// Writes one frame of the given payload size, dispatching on the message kind so
+// the four tags become four distinct types (realistic typed dispatch).
+template <std::size_t Bytes>
+void writeFrameSized(Appender<> &appender, std::uint64_t sequence,
+                     std::int64_t gen_time) {
   const auto msg_type = messageTypeFor(sequence);
-  const auto gen_time = Timestamp::now().nsec();
-
   switch (msg_type) {
   case MsgType::Trade:
-    return writeTypedFrame<TradeMessage>(appender, gen_time, msg_type, sequence);
+    return writeTypedFrame<BenchMessage<0, Bytes>>(appender, gen_time, msg_type,
+                                                   sequence);
   case MsgType::BookTop20:
-    return writeTypedFrame<MarketDepth20Message>(appender, gen_time, msg_type,
-                                                 sequence);
+    return writeTypedFrame<BenchMessage<1, Bytes>>(appender, gen_time, msg_type,
+                                                   sequence);
   case MsgType::BBO:
-    return writeTypedFrame<BboMessage>(appender, gen_time, msg_type, sequence);
+    return writeTypedFrame<BenchMessage<2, Bytes>>(appender, gen_time, msg_type,
+                                                   sequence);
   case MsgType::BookReset:
-    return writeTypedFrame<BookResetMessage>(appender, gen_time, msg_type,
-                                             sequence);
+    return writeTypedFrame<BenchMessage<3, Bytes>>(appender, gen_time, msg_type,
+                                                   sequence);
   default:
     throw std::runtime_error("unsupported benchmark message type");
+  }
+}
+
+// gen_time is the message's intended (scheduled) send time when paced, so the
+// consumer measures response time against the schedule rather than service time
+// from the actual departure. See the header comment on coordinated omission.
+// payload_bytes selects a compile-time message size (uniform within a run).
+void writeFrame(Appender<> &appender, std::uint64_t sequence,
+                std::int64_t gen_time, std::size_t payload_bytes) {
+  switch (payload_bytes) {
+  case 32:
+    return writeFrameSized<32>(appender, sequence, gen_time);
+  case 64:
+    return writeFrameSized<64>(appender, sequence, gen_time);
+  case 256:
+    return writeFrameSized<256>(appender, sequence, gen_time);
+  case 1024:
+    return writeFrameSized<1024>(appender, sequence, gen_time);
+  default:
+    throw std::runtime_error("unsupported payload_bytes");
   }
 }
 
@@ -441,14 +527,20 @@ public:
     std::atomic_signal_fence(std::memory_order_seq_cst);
 
     if (handled_messages_ >= warmup_messages_) {
-      const auto latency = Timestamp::now().nsec() - frame.getGenTime();
-      if (latency >= 0 && latency < 1'000'000'000LL) {
-        if (prefault_latencies_) {
-          if (latency_count_ < latencies_.size())
-            latencies_[latency_count_++] = latency;
-        } else {
-          latencies_.push_back(latency);
-        }
+      // Clamp into [0, 1s] and record every measured sample — never drop one.
+      // The comparative Chronicle/Aeron drivers clamp identically; dropping
+      // out-of-range samples here instead would silently shed tail entries the
+      // JVM drivers keep, biasing revoq's tail downward under a saturated run.
+      auto latency = Timestamp::now().nsec() - frame.getGenTime();
+      if (latency < 0)
+        latency = 0;
+      else if (latency > 1'000'000'000LL)
+        latency = 1'000'000'000LL;
+      if (prefault_latencies_) {
+        if (latency_count_ < latencies_.size())
+          latencies_[latency_count_++] = latency;
+      } else {
+        latencies_.push_back(latency);
       }
     }
     ++handled_messages_;
@@ -477,19 +569,36 @@ private:
 
 class StaticDispatcher {
 public:
-  explicit StaticDispatcher(HandlerCollector &collector)
-      : collector_(collector) {}
+  StaticDispatcher(HandlerCollector &collector, std::size_t payload_bytes)
+      : collector_(collector), payload_bytes_(payload_bytes) {}
 
   void operator()(MergingCursor::FrameView current) {
+    switch (payload_bytes_) {
+    case 32:
+      return dispatch<32>(current);
+    case 64:
+      return dispatch<64>(current);
+    case 256:
+      return dispatch<256>(current);
+    case 1024:
+      return dispatch<1024>(current);
+    default:
+      throw std::runtime_error("unsupported payload_bytes");
+    }
+  }
+
+private:
+  template <std::size_t Bytes>
+  void dispatch(MergingCursor::FrameView current) {
     switch (static_cast<MsgType>(current.msg_type)) {
     case MsgType::Trade:
-      return handle<TradeMessage>(current);
+      return handle<BenchMessage<0, Bytes>>(current);
     case MsgType::BookTop20:
-      return handle<MarketDepth20Message>(current);
+      return handle<BenchMessage<1, Bytes>>(current);
     case MsgType::BBO:
-      return handle<BboMessage>(current);
+      return handle<BenchMessage<2, Bytes>>(current);
     case MsgType::BookReset:
-      return handle<BookResetMessage>(current);
+      return handle<BenchMessage<3, Bytes>>(current);
     case MsgType::SegmentEnd:
       return;
     default:
@@ -497,7 +606,6 @@ public:
     }
   }
 
-private:
   template <typename T> void handle(MergingCursor::FrameView current) {
     if (current->getDataLength(current.frame_length) != sizeof(T)) {
       throw std::runtime_error("unexpected payload size in benchmark");
@@ -506,6 +614,7 @@ private:
   }
 
   HandlerCollector &collector_;
+  std::size_t payload_bytes_;
 };
 
 std::int64_t percentile(const std::vector<std::int64_t> &values,
@@ -532,10 +641,32 @@ LatencyStats computeStats(std::vector<std::int64_t> values) {
   stats.p90_ns = percentile(values, 90, 100);
   stats.p99_ns = percentile(values, 99, 100);
   stats.p999_ns = percentile(values, 999, 1000);
+  stats.p9999_ns = percentile(values, 9999, 10000);
+  stats.p99999_ns = percentile(values, 99999, 100000);
   stats.max_ns = values.back();
   const auto sum = std::accumulate(values.begin(), values.end(), 0.0L);
   stats.mean_ns = static_cast<double>(sum / values.size());
   return stats;
+}
+
+// Encode the full latency distribution as an HdrHistogram base64 "V2" string —
+// the same lossless, standard interchange format Chronicle/Aeron emit — so a
+// reader can recompute any percentile and compare across systems. Range and
+// precision (1 ns .. 1 s, 3 significant figures) match the collector's clamp.
+std::string encodeLatencyHistogram(const std::vector<std::int64_t> &values) {
+  hdr_histogram *hist = nullptr;
+  if (hdr_init(1, 1'000'000'000LL, 3, &hist) != 0 || hist == nullptr)
+    return {};
+  for (const auto v : values)
+    hdr_record_value(hist, v < 0 ? 0 : v);
+
+  char *encoded = nullptr;
+  std::string out;
+  if (hdr_log_encode(hist, &encoded) == 0 && encoded != nullptr)
+    out.assign(encoded);
+  std::free(encoded);
+  hdr_close(hist);
+  return out;
 }
 
 void prepareLatencyBuffer(std::vector<std::int64_t> &latencies,
@@ -655,9 +786,15 @@ MergingCursorOptions cursorOptions(const BenchmarkConfig &cfg) {
   };
 }
 
+// window_ns_out, if non-null, receives the wall-clock nanoseconds spent sending
+// the measured (post-warmup) messages. achieved_rate = messages / window; for a
+// paced run it equals the offered rate unless the system saturated (the pacer
+// stops waiting and sends fall behind schedule), which is exactly the signal
+// needed to flag saturation.
 void runAppender(Appender<> &appender, const BenchmarkConfig &cfg,
                const std::atomic<bool> &cursor_ready,
-               const std::atomic<bool> &stop_requested) {
+               const std::atomic<bool> &stop_requested,
+               std::int64_t *window_ns_out = nullptr) {
   while (!cursor_ready.load(std::memory_order_acquire) &&
          !stop_requested.load(std::memory_order_acquire)) {
     PORTABLE_PAUSE();
@@ -666,32 +803,46 @@ void runAppender(Appender<> &appender, const BenchmarkConfig &cfg,
     return;
 
   const auto total_messages = cfg.warmup_messages + cfg.messages;
+  std::int64_t measured_start_ns = 0;
   auto next_write_time = Timestamp::now().nsec();
   for (std::uint64_t i = 0; i < total_messages; ++i) {
     if (stop_requested.load(std::memory_order_acquire))
       return;
+    // Stamp the frame with its intended (scheduled) departure time when paced,
+    // so a late producer shows up in the consumer's tail instead of being
+    // silently erased (coordinated omission). Unpaced runs have no schedule, so
+    // the actual send time is the honest stamp.
+    std::int64_t gen_time;
     if (cfg.interval_ns > 0) {
+      gen_time = next_write_time;
       while (Timestamp::now().nsec() < next_write_time &&
              !stop_requested.load(std::memory_order_acquire)) {
         PORTABLE_PAUSE();
       }
       next_write_time += static_cast<std::int64_t>(cfg.interval_ns);
+    } else {
+      gen_time = Timestamp::now().nsec();
     }
-    writeFrame(appender, i);
+    if (i == cfg.warmup_messages)
+      measured_start_ns = Timestamp::now().nsec();
+    writeFrame(appender, i, gen_time, cfg.payload_bytes);
   }
+  if (window_ns_out != nullptr && cfg.messages > 0)
+    *window_ns_out = Timestamp::now().nsec() - measured_start_ns;
 }
 
 BenchmarkResult runCursor(const LocationPtr &location,
                           const BenchmarkConfig &cfg,
                           std::atomic<bool> &cursor_ready,
                           const std::atomic<bool> &appender_done,
-                          const std::atomic<bool> &stop_requested) {
+                          const std::atomic<bool> &stop_requested,
+                          std::string &hdr_out) {
   applyTunedSetup(cfg, BenchmarkRole::Cursor);
   MergingCursor cursor(cursorOptions(cfg));
   cursor.join(location, kDestId, 0);
 
   HandlerCollector collector(cfg.warmup_messages, cfg.messages, cfg.tuned);
-  StaticDispatcher dispatcher(collector);
+  StaticDispatcher dispatcher(collector, cfg.payload_bytes);
   const auto total_messages = cfg.warmup_messages + cfg.messages;
   cursor_ready.store(true, std::memory_order_release);
 
@@ -706,6 +857,7 @@ BenchmarkResult runCursor(const LocationPtr &location,
   }
 
   auto latencies = collector.takeLatencies();
+  hdr_out = encodeLatencyHistogram(latencies);
   BenchmarkResult result{
       .latency = computeStats(std::move(latencies)),
       .handled_messages = collector.handledMessages(),
@@ -775,14 +927,29 @@ template <typename T> T readPipeValue(int fd) {
   return value;
 }
 
+void writePipeString(int fd, const std::string &value) {
+  writePipeValue(fd, static_cast<std::uint64_t>(value.size()));
+  if (!value.empty() && !writeAll(fd, value.data(), value.size()))
+    throw std::runtime_error("failed to write pipe string");
+}
+
+std::string readPipeString(int fd) {
+  const auto size = readPipeValue<std::uint64_t>(fd);
+  std::string value(static_cast<std::size_t>(size), '\0');
+  if (size != 0 && !readAll(fd, value.data(), value.size()))
+    throw std::runtime_error("failed to read pipe string");
+  return value;
+}
+
 BenchmarkResult runCursorProcess(const LocationPtr &location,
-                                 const BenchmarkConfig &cfg, int ready_fd) {
+                                 const BenchmarkConfig &cfg, int ready_fd,
+                                 std::string &hdr_out) {
   applyTunedSetup(cfg, BenchmarkRole::Cursor);
   MergingCursor cursor(cursorOptions(cfg));
   cursor.join(location, kDestId, 0);
 
   HandlerCollector collector(cfg.warmup_messages, cfg.messages, cfg.tuned);
-  StaticDispatcher dispatcher(collector);
+  StaticDispatcher dispatcher(collector, cfg.payload_bytes);
   const auto total_messages = cfg.warmup_messages + cfg.messages;
   writeSignal(ready_fd);
   closeFd(ready_fd);
@@ -801,6 +968,7 @@ BenchmarkResult runCursorProcess(const LocationPtr &location,
   }
 
   auto latencies = collector.takeLatencies();
+  hdr_out = encodeLatencyHistogram(latencies);
   return BenchmarkResult{
       .latency = computeStats(std::move(latencies)),
       .handled_messages = collector.handledMessages(),
@@ -808,7 +976,7 @@ BenchmarkResult runCursorProcess(const LocationPtr &location,
   };
 }
 
-BenchmarkResult runForkedBenchmark(const BenchmarkConfig &cfg) {
+BenchmarkOutput runForkedBenchmark(const BenchmarkConfig &cfg) {
   BenchmarkFixture fixture(cfg);
 
   int start_pipe[2] = {-1, -1};
@@ -845,9 +1013,11 @@ BenchmarkResult runForkedBenchmark(const BenchmarkConfig &cfg) {
       if (!readSignal(start_pipe[0]))
         throw std::runtime_error("cursor did not receive appender-ready signal");
       closeFd(start_pipe[0]);
+      std::string hdr_b64;
       const auto result =
-          runCursorProcess(fixture.location, cfg, ready_pipe[1]);
+          runCursorProcess(fixture.location, cfg, ready_pipe[1], hdr_b64);
       writePipeValue(result_pipe[1], result);
+      writePipeString(result_pipe[1], hdr_b64);
       closeFd(result_pipe[1]);
       std::fflush(stdout);
       std::fflush(stderr);
@@ -875,7 +1045,16 @@ BenchmarkResult runForkedBenchmark(const BenchmarkConfig &cfg) {
 
     std::atomic<bool> cursor_ready{true};
     std::atomic<bool> stop_requested{false};
-    runAppender(appender, cfg, cursor_ready, stop_requested);
+    std::int64_t window_ns = 0;
+    runAppender(appender, cfg, cursor_ready, stop_requested, &window_ns);
+
+    // Drain the result pipe BEFORE reaping the child. The child blocks writing
+    // the variable-length histogram (hdr_b64) until we read it, so waiting on
+    // the child first would deadlock whenever hdr_b64 exceeds the pipe buffer
+    // (~64 KB): child stuck in writeAll(), parent stuck in waitpid().
+    auto result = readPipeValue<BenchmarkResult>(result_pipe[0]);
+    auto hdr_b64 = readPipeString(result_pipe[0]);
+    closeFd(result_pipe[0]);
 
     int status = 0;
     if (waitpid(pid, &status, 0) < 0) {
@@ -886,12 +1065,15 @@ BenchmarkResult runForkedBenchmark(const BenchmarkConfig &cfg) {
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
       throw std::runtime_error("cursor process failed");
     }
-
-    auto result = readPipeValue<BenchmarkResult>(result_pipe[0]);
-    closeFd(result_pipe[0]);
     if (cfg.keep_files)
       fmt::print("journal_path={}\n", fixture.path.string());
-    return result;
+    const double achieved_mps =
+        window_ns > 0
+            ? static_cast<double>(cfg.messages) * 1e9 / static_cast<double>(window_ns)
+            : 0.0;
+    return BenchmarkOutput{.result = result,
+                           .hdr_b64 = std::move(hdr_b64),
+                           .achieved_mps = achieved_mps};
   } catch (...) {
     closeFd(start_pipe[1]);
     closeFd(ready_pipe[0]);
@@ -905,7 +1087,7 @@ BenchmarkResult runForkedBenchmark(const BenchmarkConfig &cfg) {
 }
 #endif
 
-BenchmarkResult runBenchmark(const BenchmarkConfig &cfg) {
+BenchmarkOutput runBenchmark(const BenchmarkConfig &cfg) {
 #ifdef __linux__
   if (cfg.tuned && cfg.fork_cursor)
     return runForkedBenchmark(cfg);
@@ -923,11 +1105,13 @@ BenchmarkResult runBenchmark(const BenchmarkConfig &cfg) {
   std::exception_ptr appender_error;
   std::exception_ptr cursor_error;
   BenchmarkResult result;
+  std::string hdr_b64;
+  std::int64_t window_ns = 0;
 
   std::thread cursor_thread([&] {
     try {
       result = runCursor(fixture.location, cfg, cursor_ready, appender_done,
-                         stop_requested);
+                         stop_requested, hdr_b64);
     } catch (...) {
       cursor_error = std::current_exception();
       stop_requested.store(true, std::memory_order_release);
@@ -937,7 +1121,7 @@ BenchmarkResult runBenchmark(const BenchmarkConfig &cfg) {
 
   std::thread appender_thread([&] {
     try {
-      runAppender(appender, cfg, cursor_ready, stop_requested);
+      runAppender(appender, cfg, cursor_ready, stop_requested, &window_ns);
     } catch (...) {
       appender_error = std::current_exception();
       stop_requested.store(true, std::memory_order_release);
@@ -956,10 +1140,17 @@ BenchmarkResult runBenchmark(const BenchmarkConfig &cfg) {
   if (cfg.keep_files)
     fmt::print("journal_path={}\n", fixture.path.string());
 
-  return result;
+  const double achieved_mps =
+      window_ns > 0
+          ? static_cast<double>(cfg.messages) * 1e9 / static_cast<double>(window_ns)
+          : 0.0;
+  return BenchmarkOutput{.result = result,
+                         .hdr_b64 = std::move(hdr_b64),
+                         .achieved_mps = achieved_mps};
 }
 
-void printSummary(const BenchmarkConfig &cfg, const BenchmarkResult &result) {
+void printSummary(const BenchmarkConfig &cfg, const BenchmarkOutput &output) {
+  const auto &result = output.result;
   const auto &s = result.latency;
   const double rate_mps = cfg.interval_ns == 0
                               ? 0.0
@@ -980,13 +1171,23 @@ void printSummary(const BenchmarkConfig &cfg, const BenchmarkResult &result) {
   if (cfg.interval_ns > 0)
     fmt::print(" rate_mps={:.3f}", rate_mps);
   fmt::print("\n");
-  fmt::print("payload_bytes=32 message_types=4 dispatch=static_switch\n");
+  fmt::print("payload_bytes={} message_types=4 dispatch=static_switch\n",
+             cfg.payload_bytes);
   fmt::print("samples={} min_ns={} p50_ns={} p90_ns={} p99_ns={} p999_ns={} "
-             "max_ns={} mean_ns={:.1f}\n",
+             "p9999_ns={} p99999_ns={} max_ns={} mean_ns={:.1f}\n",
              s.samples, s.min_ns, s.p50_ns, s.p90_ns, s.p99_ns, s.p999_ns,
-             s.max_ns, s.mean_ns);
+             s.p9999_ns, s.p99999_ns, s.max_ns, s.mean_ns);
   fmt::print("handled_messages={} checksum={}\n", result.handled_messages,
              result.checksum);
+  // Producer's sustained send rate over the measured window. For a paced run,
+  // achieved < offered means the system saturated (the pacer could not keep the
+  // schedule); for an unpaced run this is the raw throughput.
+  fmt::print("achieved_mps={:.1f}\n", output.achieved_mps);
+  // HdrHistogram base64 "V2" encoding of the full latency distribution: the
+  // lossless, standard interchange format for cross-system comparison. Decode
+  // with any HdrHistogram tooling to recompute arbitrary percentiles.
+  if (!output.hdr_b64.empty())
+    fmt::print("latency_hdr_b64={}\n", output.hdr_b64);
 }
 
 } // namespace
@@ -996,8 +1197,8 @@ int main(int argc, char **argv) {
     spdlog::set_level(spdlog::level::warn);
 
     const auto cfg = parseArgs(argc, argv);
-    const auto result = runBenchmark(cfg);
-    printSummary(cfg, result);
+    const auto output = runBenchmark(cfg);
+    printSummary(cfg, output);
     return 0;
   } catch (const std::exception &e) {
     fmt::print(stderr, "error: {}\n", e.what());

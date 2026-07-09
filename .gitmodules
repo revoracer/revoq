@@ -10,3 +10,6 @@
 [submodule "external/pybind11"]
 	path = external/pybind11
 	url = https://github.com/pybind/pybind11.git
+[submodule "external/HdrHistogram_c"]
+	path = external/HdrHistogram_c
+	url = https://github.com/HdrHistogram/HdrHistogram_c.git

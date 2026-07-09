@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 RevoRacer
-#include <revoq/MmapBuffer.h>
+#include "revoq/MmapBuffer.h"
 
 #include <cerrno>
 #include <cstring>
@@ -33,7 +33,7 @@ namespace os {
 
 std::uintptr_t MmapBuffer::loadMmapBuffer(const std::string &path,
                                           std::size_t size, bool is_writing,
-                                          bool prefault) {
+                                          bool prefault, bool zero_new_file) {
 
   struct stat st{};
   bool file_exists = false;
@@ -100,6 +100,7 @@ std::uintptr_t MmapBuffer::loadMmapBuffer(const std::string &path,
 
     flags |= MAP_POPULATE;
 #endif
+
   }
 
   void *buffer = mmap(nullptr, size, prot, flags, fd, 0);
@@ -151,7 +152,7 @@ std::uintptr_t MmapBuffer::loadMmapBuffer(const std::string &path,
 #endif
     }
 
-    if (is_writing && !file_exists) {
+    if (is_writing && !file_exists && zero_new_file) {
 
       std::memset(buffer, 0, size);
     } else {

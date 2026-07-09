@@ -152,10 +152,13 @@ sudo ./build/revoq_benchmark_stream_handler_benchmark_p99 \
 ```
 
 **What is measured:** appender timestamp to cursor handler endpoint, over a
-deterministic mix of four 32-byte payloads. The benchmark reports the
-distribution — `p50`, `p90`, `p99`, `p999`, `max`, and `mean` in nanoseconds —
-plus sample count and a checksum, because in this domain the tail is the number
-that matters, not the average.
+deterministic message stream at a configurable payload size (`--payload-bytes`
+is 32, 64, 256, or 1024; default 32, uniform within a run). The benchmark
+reports the distribution — `p50`, `p90`, `p99`, `p999`, `p9999`, `p99999`,
+`max`, and `mean` in nanoseconds — plus the sustained producer rate
+(`achieved_mps`), sample count, a checksum, and a lossless HdrHistogram encoding
+(`latency_hdr_b64`) so the full distribution can be re-derived. In this domain
+the tail is the number that matters, not the average.
 
 ### Reference results
 
@@ -167,6 +170,60 @@ Reproduce the run with `./scripts/check_system.sh` and
 `./scripts/collect_benchmark_env.sh`, and see
 [docs/benchmarking.md](docs/benchmarking.md) and
 [docs/tuning_overview.md](docs/tuning_overview.md) for the full methodology.
+
+### Comparative benchmarks
+
+revoq also ships drivers that place it beside Aeron and Chronicle Queue (OSS) on
+one language-neutral workload, grouped by semantics **and durability** so a chart
+can never mix incompatible cells. The JVM drivers are warmed to a **confirmed JIT
+steady state** before measuring, so the numbers below are the fair, warm-JVM
+figures — not a cold-start strawman.
+
+In the non-durable shared-memory group (`volatile_ipc`), against **Aeron IPC** on
+an isolated-core host (5M msgs/point, open-loop):
+
+| latency — 256 B @ 1M msg/s | revoq | Aeron IPC |
+|---|---|---|
+| p50 | ~105 ns | ~130 ns |
+| p99 | ~140 ns | ~1.1 µs |
+| p99.9 | ~200 ns | ~3.1 µs |
+| max | ~22 µs | ~220 µs |
+
+The headline is simple: **median latency is effectively tied**, but revoq's
+**tail is much tighter**. Across payload sizes, both systems land around
+100–140 ns at p50; revoq stays near sub-150 ns p99 and sub-µs p99.9, while warm
+Aeron IPC is around ~1 µs p99 and low-single-digit-µs p99.9. Depending on
+payload and percentile, that is a **~7–15× tail-latency advantage**.
+
+At saturation (unpaced), revoq sustains **~1.9–2.5×** Aeron IPC's throughput up
+to 256 B, converging to parity at 1024 B where both are memory-bandwidth-bound:
+
+| saturation | revoq msg/s | revoq GB/s | Aeron IPC msg/s | revoq speedup |
+|---|--:|--:|--:|--:|
+| 32 B | 42.6M | 1.36 | 22.8M | **1.87×** |
+| 64 B | 42.2M | 2.70 | 21.0M | **2.01×** |
+| 256 B | 36.7M | 9.38 | 14.8M | **2.48×** |
+| 1024 B | 12.0M | 12.31 | 12.7M | 0.95× (parity) |
+
+revoq also keeps a replayable journal Aeron IPC does not — and it earns these
+numbers with a **lighter runtime footprint**:
+
+- **No broker process.** revoq's tuned path is one native process tree.
+- **No managed runtime.** There is no JVM, GC, JIT, or safepoint machinery in the
+  measured path.
+- **Fewer moving parts.** revoq pins 4 isolated roles (appender, cursor, and two
+  warmers). A clean Aeron IPC setup needs those application roles plus a
+  **MediaDriver** process with three busy-spin threads; its Archive variant uses
+  more. Chronicle is broker-less like revoq, but still carries the JVM runtime.
+
+So the advantage is not just one number. In the compatible `volatile_ipc` cell,
+revoq shows **tighter tail latency**, **higher saturation throughput up to
+256 B**, and a **smaller runtime footprint**. At 1024 B throughput converges to
+parity, where both systems are memory-bandwidth-bound. Full tables (all four
+payload sizes, both rates, plus the durable `journal_replayable` group where
+Chronicle's tail degrades sharply under load at large payloads), the committed
+result JSON, and the honest caveats live in
+[benchmarks/comparative/](benchmarks/comparative/README.md#latest-results).
 
 ## Status
 
