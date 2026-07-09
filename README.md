@@ -179,15 +179,16 @@ can never mix incompatible cells. The JVM drivers are warmed to a **confirmed JI
 steady state** before measuring, so the numbers below are the fair, warm-JVM
 figures — not a cold-start strawman.
 
-In the non-durable shared-memory group (`volatile_ipc`), against **Aeron IPC** on
-an isolated-core host (5M msgs/point, open-loop):
+The numeric charts are generated from the committed result JSON with
+`benchmarks/comparative/harness/generate_readme_charts.py`; the committed JSON
+keeps the headline values auditable.
 
-| latency — 256 B @ 1M msg/s | revoq | Aeron IPC |
-|---|---|---|
-| p50 | ~105 ns | ~130 ns |
-| p99 | ~140 ns | ~1.1 µs |
-| p99.9 | ~200 ns | ~3.1 µs |
-| max | ~22 µs | ~220 µs |
+The primary compatible cell is the non-durable shared-memory group
+(`volatile_ipc`), against **Aeron IPC** on an isolated-core host
+(5M msgs/point, open-loop). The charts also include **Chronicle Queue** as a
+clearly marked durable `journal_replayable` / `page_cache` reference point:
+
+![Tail latency chart showing revoq, Aeron IPC, and Chronicle Queue, with Chronicle marked as a separate page-cache durability cell](docs/assets/comparative-tail-latency.svg)
 
 The headline is simple: **median latency is effectively tied**, but revoq's
 **tail is much tighter**. Across payload sizes, both systems land around
@@ -198,15 +199,12 @@ payload and percentile, that is a **~7–15× tail-latency advantage**.
 At saturation (unpaced), revoq sustains **~1.9–2.5×** Aeron IPC's throughput up
 to 256 B, converging to parity at 1024 B where both are memory-bandwidth-bound:
 
-| saturation | revoq msg/s | revoq GB/s | Aeron IPC msg/s | revoq speedup |
-|---|--:|--:|--:|--:|
-| 32 B | 42.6M | 1.36 | 22.8M | **1.87×** |
-| 64 B | 42.2M | 2.70 | 21.0M | **2.01×** |
-| 256 B | 36.7M | 9.38 | 14.8M | **2.48×** |
-| 1024 B | 12.0M | 12.31 | 12.7M | 0.95× (parity) |
+![Saturation throughput chart showing revoq, Aeron IPC, and Chronicle Queue, with Chronicle marked as a separate page-cache durability cell](docs/assets/comparative-throughput.svg)
 
 revoq also keeps a replayable journal Aeron IPC does not — and it earns these
 numbers with a **lighter runtime footprint**:
+
+![Runtime footprint chart highlighting lower hardware resource demand for revoq through no broker, no JVM, and fewer runtime layers](docs/assets/comparative-runtime-footprint.svg)
 
 - **No broker process.** revoq's tuned path is one native process tree.
 - **No managed runtime.** There is no JVM, GC, JIT, or safepoint machinery in the
@@ -224,6 +222,34 @@ payload sizes, both rates, plus the durable `journal_replayable` group where
 Chronicle's tail degrades sharply under load at large payloads), the committed
 result JSON, and the honest caveats live in
 [benchmarks/comparative/](benchmarks/comparative/README.md#latest-results).
+
+## Beyond Trading
+
+revoq was built for latency-sensitive trading systems, but the same design
+applies anywhere same-host processes need deterministic, high-throughput
+handoff: memory isolation between components, low jitter, and replayable event
+streams.
+
+| Industry | What revoq can connect | Bottleneck reduced |
+| :--- | :--- | :--- |
+| **Robotics & autonomous vehicles** | Sensor, perception, planning, and control processes. | Scheduler and IPC jitter in critical handoff paths. |
+| **Telecom & packet processing** | User-space networking stages, packet classifiers, and control-plane services. | Kernel-mediated IPC overhead between high-rate local stages. |
+| **Databases & ingestion** | Network ingest, validation, indexing, and dedicated writer processes. | Ingest stalls caused by coupling network and storage work. |
+| **Multimedia & audio** | Capture, AI inference, render, and audio-processing stages. | Frame drops and audio glitches from unpredictable local IPC latency. |
+
+If your architecture splits a hot workload across processes for isolation or
+fault containment, local TCP, Unix sockets, and pipes can add jitter. revoq keeps
+the handoff in shared memory and gives you a replayable mmap-backed journal.
+
+### Deterministic replay
+
+The same journal can also be used outside finance:
+
+- **Robotics:** record physical sensor streams and replay them in simulation.
+- **Network testing:** capture packet/event arrival sequences to reproduce rare
+  races.
+- **Media pipelines:** replay frame or audio event streams through updated
+  processing stages.
 
 ## Status
 

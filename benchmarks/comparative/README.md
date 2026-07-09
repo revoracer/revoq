@@ -75,6 +75,7 @@ comparative/
   harness/
     env_capture.sh   captures env.json (CPU, kernel, governor, hugepages, JDK)
     run_all.sh       runs each driver, collects JSON into a dated results dir
+    generate_readme_charts.py   regenerates README SVG charts from committed JSON
     validate_results.py   refuses to combine results across incompatible cells
   results/
     YYYY-MM-DD-<host>-<kernel>/
@@ -84,4 +85,3 @@ comparative/
       aeron-ipc.json
       aeron-archive.json
 ```
-
