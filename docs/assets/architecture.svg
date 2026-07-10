@@ -94,5 +94,5 @@
 
   <!-- footer -->
   <rect class="foot" x="40" y="500" width="960" height="52" rx="12"/>
-  <text class="ink body" x="64" y="532">Same host only. A slow, restarted, or crashed reader never stalls the Appender.</text>
+  <text class="ink body" x="64" y="532">Same host only. A slow, restarted, or crashed cursor never stalls the Appender.</text>
 </svg>

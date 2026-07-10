@@ -128,5 +128,5 @@
 
   <!-- footer -->
   <rect class="foot panel" x="40" y="512" width="960" height="52" rx="12"/>
-  <text class="ink body" x="64" y="544">The cursor merges without blocking any writer. One writer per stream; many cursors per stream.</text>
+  <text class="ink body" x="64" y="544">The cursor merges without blocking any appender. One appender per stream; many cursors per stream.</text>
 </svg>
