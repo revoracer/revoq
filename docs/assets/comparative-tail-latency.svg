@@ -63,6 +63,6 @@
 <rect x="784.75" y="124.07" width="26" height="207.93" rx="5" fill="#a16207"/>
 <text x="797.75" y="116.07" class="value" text-anchor="middle">703.0 us</text>
 <text x="761.75" y="360" class="label" text-anchor="middle">max</text>
-<text x="36" y="398" class="small">Note: Chronicle Queue is journal_replayable/page_cache; revoq and Aeron IPC are volatile_ipc/none.</text>
+<text x="36" y="398" class="small">Note: Chronicle Queue and revoq are journal_replayable/page_cache; Aeron IPC is volatile_ipc.</text>
 <text x="864" y="416" class="small" text-anchor="end">Source: results/2026-07-08-manual-all/*.json</text>
 </svg>

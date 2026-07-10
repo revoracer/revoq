@@ -69,6 +69,6 @@
 <text x="808.5" y="315.78" class="value" text-anchor="middle">1.5M</text>
 <text x="764.5" y="104" class="value" text-anchor="middle">parity</text>
 <text x="764.5" y="358" class="label" text-anchor="middle">1024 B</text>
-<text x="36" y="388" class="small">Note: Chronicle Queue is journal_replayable/page_cache; speedup labels compare revoq to Aeron IPC.</text>
+<text x="36" y="388" class="small">Note: Chronicle Queue and revoq are journal_replayable/page_cache; speedup labels compare revoq to Aeron IPC.</text>
 <text x="864" y="406" class="small" text-anchor="end">Source: results/2026-07-08-manual-all/*.json</text>
 </svg>
