@@ -1,0 +1,1 @@
+sudo -n ./build/revoq_benchmark_stream_handler_benchmark_p99 --tuned --fork --path /dev/hugepages/revoq-bench-public-tail-10m-5x --appender-cpu 4 --cursor-cpu 6 --appender-warmer-cpu 3 --cursor-warmer-cpu 5 --rt-priority 80 --messages 10000000 --warmup 200000 --interval-ns 100 --payload-bytes 32 
