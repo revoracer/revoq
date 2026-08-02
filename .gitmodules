@@ -13,3 +13,6 @@
 [submodule "external/HdrHistogram_c"]
 	path = external/HdrHistogram_c
 	url = https://github.com/HdrHistogram/HdrHistogram_c.git
+[submodule "external/revobase"]
+	path = external/revobase
+	url = https://github.com/revoracer/revobase.git

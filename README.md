@@ -6,18 +6,40 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey.svg)](#quick-start)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-A file-backed, memory-mapped **IPC stream** for low-latency same-host messaging.
+Open-source, file-backed, memory-mapped **IPC stream** for low-latency
+same-host messaging and replay.
 
 ## At a glance
 
 - Open-source transport primitive behind [RevoRacer](https://revoracer.com)
-  infrastructure.
+  infrastructure, published so the memory model, file format, benchmarks, and
+  failure semantics are inspectable.
 - Same-host IPC for market data, execution events, strategy signals, and
   telemetry.
+- Local event movement for AI-agent infrastructure that needs replayable,
+  low-jitter handoff between model workers, tool adapters, policy gates, and
+  execution services.
 - One hot-path writer per stream, many independent readers; slow readers do not
   stall the writer.
 - Release/acquire publication: payload first, `length` last.
-- C++23 core, optional Python bindings, Linux tuned path, Apache-2.0 license.
+- Header-only C++23 revoq layer, optional Python bindings, Linux tuned path,
+  Apache-2.0 license.
+
+## Why this repo exists
+
+RevoRacer builds low-latency infrastructure for systems where the tail matters:
+trading data paths, execution gateways, and same-host services that cannot hide
+behind broker latency or runtime jitter. `revoq` is open source because
+credibility in this domain should come from code, memory-ordering rules,
+benchmark methodology, reproducible artifacts, and clear limits.
+
+The same pressure is now showing up in AI-agent systems. Once agents call tools,
+coordinate workers, pass through approval or risk gates, and trigger real-world
+actions, the platform needs more than orchestration glue. It needs auditable
+event history, deterministic replay, process isolation, and predictable local
+handoff. `revoq` is not an agent framework; it is a transport/journal primitive
+for the hot same-host links where queues, sockets, brokers, or managed runtimes
+can add avoidable tail latency.
 
 ## Design limits
 
@@ -63,14 +85,29 @@ CXX=/usr/bin/clang++-20 ./build.sh test
 ## Quick start
 
 Requirements: Linux (recommended for latency work), CMake ≥ 3.23, a C++23
-compiler such as Clang 20, and Git submodules for the bundled deps (`fmt`,
-`spdlog`, `Catch2`, `pybind11`).
+compiler such as Clang 20, and Git submodules for the bundled deps (`revobase`,
+`fmt`, `spdlog`, `Catch2`, `pybind11`).
 
 ```bash
 CXX=/usr/bin/clang++-20 ./build.sh            # build
 CXX=/usr/bin/clang++-20 ./build.sh test       # run C++ tests
 CXX=/usr/bin/clang++-20 ./build.sh examples   # build C++ examples
 CXX=/usr/bin/clang++-20 ./build.sh python     # build + test Python bindings
+```
+
+### Library shape
+
+`revoq` itself is header-only: the stream, appender, cursor, frame, and
+dispatcher APIs live under [`include/revoq/`](include/revoq). The build still
+links compiled support code from [`revobase`](external/revobase) for mmap,
+hashing, time, affinity, and realtime helpers.
+
+For CMake consumers, link the target and let it carry the transitive
+dependencies:
+
+```cmake
+add_subdirectory(revoq)
+target_link_libraries(my_app PRIVATE revoq::revoq)
 ```
 
 ### Write and read (C++)
@@ -236,6 +273,7 @@ streams.
 | **Telecom & packet processing** | User-space networking stages, packet classifiers, and control-plane services. | Kernel-mediated IPC overhead between high-rate local stages. |
 | **Databases & ingestion** | Network ingest, validation, indexing, and dedicated writer processes. | Ingest stalls caused by coupling network and storage work. |
 | **Multimedia & audio** | Capture, AI inference, render, and audio-processing stages. | Frame drops and audio glitches from unpredictable local IPC latency. |
+| **AI agents & automation** | Model workers, tool adapters, policy/risk gates, memory/indexing services, and execution adapters. | Broker/runtime jitter and weak replayability across local decision loops. |
 
 If your architecture splits a hot workload across processes for isolation or
 fault containment, local TCP, Unix sockets, and pipes can add jitter. revoq keeps
@@ -250,6 +288,8 @@ The same journal can also be used outside finance:
   races.
 - **Media pipelines:** replay frame or audio event streams through updated
   processing stages.
+- **AI agents:** capture decision, tool-call, approval, and execution event
+  streams for audit, debugging, and deterministic replay.
 
 ## Status
 
@@ -262,6 +302,10 @@ change — see [CHANGELOG.md](CHANGELOG.md).
 revoq is open source so teams can inspect the memory model, file format,
 benchmarks, and failure semantics. RevoRacer builds low-latency trading
 infrastructure for hedge funds and trading teams.
+
+The AI-agent era makes this kind of infrastructure more relevant, not less:
+more decisions are becoming event streams, and more event streams eventually
+touch systems where replay, isolation, and tail latency matter.
 
 We can help with revoq integration, benchmark reproduction on your hardware,
 Linux host tuning, feed-handler and execution-gateway paths, and custom same-host

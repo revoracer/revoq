@@ -7,9 +7,10 @@
 #include <memory>
 
 #include "Frame.h"
-#include "MmapBuffer.h"
 #include "RevoqError.h"
 #include "StreamBase.h"
+
+#include <revobase/MmapBuffer.h>
 
 namespace racer::revoq {
 
@@ -56,10 +57,11 @@ public:
 
       const auto msync_mode = (location_->category == Category::MARKETDATA ||
                                location_->category == Category::RESEARCHDATA)
-                                  ? racer::os::MsyncMode::NONE
-                                  : racer::os::MsyncMode::ASYNC;
-      if (racer::os::MmapBuffer::releaseMmapBuffer(address(), size_, prefault_,
-                                                   msync_mode)) {
+                                  ? revobase::os::MsyncMode::NONE
+                                  : revobase::os::MsyncMode::ASYNC;
+      if (revobase::os::MmapBuffer::releaseMmapBuffer(address(), size_,
+                                                      prefault_,
+                                                      msync_mode)) {
         SPDLOG_TRACE("released segment {}/{:08x}.{}.stream", location_->uname,
                      dest_id_, segment_id_);
       } else {
@@ -130,8 +132,8 @@ public:
                           segmentFileName(dest_id, segment_id);
     std::uintptr_t address = 0;
     try {
-      address = os::MmapBuffer::loadMmapBuffer(path.string(), segment_size,
-                                               is_writing, prefault);
+      address = revobase::os::MmapBuffer::loadMmapBuffer(
+          path.string(), segment_size, is_writing, prefault);
     } catch (const std::exception &e) {
       throw RevoqError(fmt::format("Failed to mmap segment {}: {}",
                                    path.string(), e.what()));
@@ -146,8 +148,8 @@ public:
     bool is_new_segment = (header->last_frame_position == 0);
     if (is_new_segment) {
       if (!is_writing) {
-        os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                          os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            address, segment_size, prefault, revobase::os::MsyncMode::NONE);
         throw RevoqError(
             fmt::format("Uninitialized segment {}", path.string()));
       }
@@ -168,24 +170,24 @@ public:
     }
 
     if (header->version != SEGMENT_VERSION) {
-      os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, prefault, revobase::os::MsyncMode::NONE);
       throw RevoqError(
           fmt::format("Version mismatch for segment {}, required {}, found {}",
                       path.string(), SEGMENT_VERSION, header->version));
     }
 
     if (header->segment_header_length != sizeof(SegmentHeader)) {
-      os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, prefault, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Header length mismatch for segment {}, required {}, found {}",
           path.string(), sizeof(SegmentHeader), header->segment_header_length));
     }
 
     if (header->segment_size != segment_size) {
-      os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, prefault, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Segment size mismatch for segment {}, required {}, found {}",
           path.string(), segment_size, header->segment_size));
@@ -195,8 +197,8 @@ public:
       SPDLOG_WARN(
           "Invalid last_frame_position {} for segment {} (size {}), resetting",
           header->last_frame_position, path.string(), segment_size);
-      os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, prefault, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Invalid last_frame_position {} for segment {} (size {}), resetting",
           header->last_frame_position, path.string(), segment_size));

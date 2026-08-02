@@ -47,14 +47,14 @@
 #include <hdr/hdr_histogram.h>
 #include <hdr/hdr_histogram_log.h>
 
-#include <revoq/CpuAffinity.h>
-#include <revoq/StreamBase.h>
+#include <revoq/Appender.h>
 #include <revoq/Frame.h>
 #include <revoq/MergingCursor.h>
-#include <revoq/Appender.h>
-#include <revoq/RealtimePriority.h>
-#include <revoq/TimeUtils.h>
-#include <revoq/portable_intrinsics.h>
+#include <revoq/StreamBase.h>
+#include <revobase/CpuAffinity.h>
+#include <revobase/RealtimePriority.h>
+#include <revobase/TimeUtils.h>
+#include <revobase/portable_intrinsics.h>
 
 #ifndef HUGETLBFS_MAGIC
 #define HUGETLBFS_MAGIC 0x958458f6
@@ -62,8 +62,8 @@
 
 namespace {
 
-using racer::Timestamp;
 using namespace racer::revoq;
+using revobase::Timestamp;
 
 constexpr std::uint32_t kDestId = 0;
 constexpr std::uint64_t kDefaultMessages = 1'000'000;
@@ -727,18 +727,18 @@ void applyTunedSetup(const BenchmarkConfig &cfg, BenchmarkRole role) {
     return;
 
   const int cpu = roleCpu(cfg, role);
-  if (!racer::system::CpuAffinity::pinToCore(cpu)) {
+  if (!revobase::system::CpuAffinity::pinToCore(cpu)) {
     throw std::runtime_error(
         fmt::format("{} failed to pin to CPU {}", roleName(role), cpu));
   }
 
-  racer::system::RealtimePriority::prefaultStack();
-  if (!racer::system::RealtimePriority::lockCurrentMemory()) {
+  revobase::system::RealtimePriority::prefaultStack();
+  if (!revobase::system::RealtimePriority::lockCurrentMemory()) {
     throw std::runtime_error(fmt::format(
         "{} failed to lock current memory; check ulimit -l", roleName(role)));
   }
-  if (!racer::system::RealtimePriority::setRealtimePriority(
-          cfg.rt_priority, racer::system::SchedulerPolicy::FIFO)) {
+  if (!revobase::system::RealtimePriority::setRealtimePriority(
+          cfg.rt_priority, revobase::system::SchedulerPolicy::FIFO)) {
     throw std::runtime_error(fmt::format(
         "{} failed to set real-time priority {}; run as root or grant "
         "CAP_SYS_NICE",

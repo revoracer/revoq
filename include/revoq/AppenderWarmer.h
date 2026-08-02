@@ -14,16 +14,16 @@
 #include <thread>
 #include <unistd.h>
 
-#include "CpuAffinity.h"
 #include "Frame.h"
-#include "MmapBuffer.h"
-#include "RealtimePriority.h"
 #include "Segment.h"
 #include "StreamBase.h"
-#include "TimeUtils.h"
 #include "detail/StreamPlatform.h"
-#include "portable_intrinsics.h"
 
+#include <revobase/CpuAffinity.h>
+#include <revobase/MmapBuffer.h>
+#include <revobase/RealtimePriority.h>
+#include <revobase/TimeUtils.h>
+#include <revobase/portable_intrinsics.h>
 #include <spdlog/spdlog.h>
 
 namespace racer::revoq {
@@ -170,8 +170,8 @@ private:
     for (size_t i = 0; i < RingSize; ++i) {
       SegmentSlot &slot = ring_[i];
       if (slot.is_owned && slot.address != 0) {
-        os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
-                                          os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            slot.address, slot.size, false, revobase::os::MsyncMode::NONE);
         slot.address = 0;
         slot.is_owned = false;
       }
@@ -194,9 +194,9 @@ private:
 
     bool dedicated = false;
     if (warmer_cpu_core_ >= 0) {
-      if (system::CpuAffinity::pinToCore(warmer_cpu_core_)) {
+      if (revobase::system::CpuAffinity::pinToCore(warmer_cpu_core_)) {
         dedicated = true;
-        if (!system::RealtimePriority::setRealtimePriority(50))
+        if (!revobase::system::RealtimePriority::setRealtimePriority(50))
           SPDLOG_ERROR("warmer: failed to set RT priority");
         else
           SPDLOG_DEBUG("Warmer thread pinned to CPU {} with RT priority {}",
@@ -292,14 +292,14 @@ private:
                                 static_cast<int>(segment_id))
             .string();
     assert(!segment_file.empty());
-    const auto t0 = Timestamp::now();
+    const auto t0 = revobase::Timestamp::now();
     const bool file_existed = std::filesystem::exists(segment_file);
     SPDLOG_DEBUG("AppenderWarmer warming segment {} ({})", segment_id,
                  segment_file);
 
     std::uintptr_t addr = 0;
     try {
-      addr = os::MmapBuffer::loadMmapBuffer(
+      addr = revobase::os::MmapBuffer::loadMmapBuffer(
           segment_file, segment_size_,
           is_appender_,
           true,
@@ -320,8 +320,8 @@ private:
     if (is_appender_) {
 
       if (segment_id <= current_segment_.load(std::memory_order_acquire)) {
-        os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
-                                          os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            addr, segment_size_, true, revobase::os::MsyncMode::NONE);
         return false;
       }
       auto *header = reinterpret_cast<SegmentHeader *>(addr);
@@ -339,8 +339,8 @@ private:
       } else if (header->version != SEGMENT_VERSION ||
                  header->segment_header_length != sizeof(SegmentHeader) ||
                  header->segment_size != static_cast<uint32_t>(segment_size_)) {
-        os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
-                                          os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            addr, segment_size_, true, revobase::os::MsyncMode::NONE);
         throw std::runtime_error(
             "existing warmed segment has invalid header: " + segment_file);
       }
@@ -350,11 +350,12 @@ private:
     slot.is_owned = true;
     slot.sequence.store(seq, std::memory_order_release);
     slot.segment_id.store(segment_id, std::memory_order_release);
-    const auto t1 = Timestamp::now();
+    const auto t1 = revobase::Timestamp::now();
+    const auto elapsed_ns = (t1 - t0).count();
     SPDLOG_INFO("AppenderWarmer warmed segment {} in {:.3f} ms", segment_id,
-                static_cast<double>((t1 - t0).nsec()) / 1'000'000.0);
+                static_cast<double>(elapsed_ns) / 1'000'000.0);
     SPDLOG_TRACE("Warmed file-backed segment {} in {} ns", segment_id,
-                 (t1 - t0).nsec());
+                 elapsed_ns);
     return true;
   }
 
@@ -371,8 +372,8 @@ private:
                 slot_segment_id, -1, std::memory_order_acq_rel)) {
 
           if (slot.is_owned && slot.address != 0) {
-            os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
-                                              os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                slot.address, slot.size, false, revobase::os::MsyncMode::NONE);
             slot.address = 0;
             slot.is_owned = false;
           }

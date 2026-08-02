@@ -7,7 +7,7 @@
 
 #include <revoq/Appender.h>
 #include <revoq/MergingCursor.h>
-#include <revoq/TimeUtils.h>
+#include <revobase/TimeUtils.h>
 #include "test_helpers.h"
 
 using namespace racer::revoq;
@@ -56,7 +56,7 @@ public:
         location, dest_id, AppenderOptions{.prefault = true});
 
     if (start_time == 0) {
-      start_time = racer::TimeUtils::now().nsec();
+      start_time = revobase::Timestamp::now().nsec();
     }
 
     for (int i = 0; i < num_messages; ++i) {
@@ -216,7 +216,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor basic reading",
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
                  "[cursor][merge]") {
   // Write to 3 different streams with interleaved timestamps
-  int64_t base_time = racer::TimeUtils::now().nsec();
+  int64_t base_time = revobase::Timestamp::now().nsec();
 
   // Stream 0: times 0, 3, 6, 9...
   {
@@ -309,7 +309,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
 // ============================================================================
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor seek", "[cursor][seek]") {
-  int64_t base_time = racer::TimeUtils::now().nsec();
+  int64_t base_time = revobase::Timestamp::now().nsec();
 
   // Write 100 messages with known timestamps
   {

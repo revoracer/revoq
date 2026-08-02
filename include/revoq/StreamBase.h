@@ -14,9 +14,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "FileUtils.h"
-#include "HashUtils.h"
-#include "StringUtils.hpp"
+#include <revobase/FileUtils.h>
+#include <revobase/HashUtils.h>
+#include <revobase/StringUtils.hpp>
 
 namespace racer::revoq {
 enum class Mode : std::int8_t { UNKNOWN = 0, LIVE, REPLAY };
@@ -162,7 +162,7 @@ public:
       : mode(m), category(c), group(std::move(g)), name(std::move(n)),
         category_str(categoryToStr(c)), mode_str(modeToStr(m)),
         uname(makeUname(category_str, group, name, mode_str)),
-        uid(racer::HashUtils::hashStr32(uname)), locator(std::move(l)) {}
+        uid(revobase::HashUtils::hashStr32(uname)), locator(std::move(l)) {}
 
   virtual ~Location() = default;
 
@@ -243,7 +243,7 @@ public:
     auto p = makeLayoutDir(location, l);
     auto p2 = p / fmt::format("{}.{}", name, layoutToStr(l));
     if (!std::filesystem::exists(p2)) {
-      racer::FileUtils::touch(p2);
+      revobase::FileUtils::touch(p2);
     }
     return p2;
   }
@@ -254,7 +254,8 @@ public:
     auto p = makeLayoutDir(location, Layout::STREAM);
     std::vector<int> segment_ids;
     for (const auto &entry : std::filesystem::directory_iterator(p)) {
-      auto parts = StringUtils::split(entry.path().filename().string(), '.');
+      auto parts =
+          revobase::StringUtils::split(entry.path().filename().string(), '.');
       if (parts[0] == hex_dest_id) {
         segment_ids.push_back(std::stoi(parts[1]));
       }

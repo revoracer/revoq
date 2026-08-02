@@ -3,16 +3,10 @@ Copyright 2026 RevoRacer
 
 Revoq is maintained by RevoRacer.
 
-This product includes third-party software:
-
-MurmurHash3
-  Written by Austin Appleby and placed in the public domain. The author
-  disclaimed copyright to the source code.
-  Vendored at: include/revoq/MurMurHash3.h, src/MurMurHash3.cpp
-
 Bundled dependencies (as Git submodules under external/, each under its own
 license; see the LICENSE file in each directory):
 
+  revobase   - Apache License 2.0 (external/revobase)
   fmt        - MIT License        (external/fmt)
   spdlog     - MIT License        (external/spdlog)
   Catch2     - Boost Software License 1.0 (external/Catch2)

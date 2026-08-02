@@ -10,7 +10,7 @@
 
 #include <revoq/Appender.h>
 #include <revoq/MergingCursor.h>
-#include <revoq/TimeUtils.h>
+#include <revobase/TimeUtils.h>
 #include "test_helpers.h"
 
 using namespace racer::revoq;
@@ -123,7 +123,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender basic writes",
       location, 0, AppenderOptions{.prefault = true});
 
   SECTION("Can write single message") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.5, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.5, 1000, 'B'};
 
     publish(*appender, trade.timestamp, MsgType::Trade, trade);
     REQUIRE(appender->getCurrentSequence() == 1);
@@ -131,7 +131,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender basic writes",
 
   SECTION("Can write multiple messages") {
     for (int i = 0; i < 100; ++i) {
-      TestTrade trade{racer::TimeUtils::now().nsec(), static_cast<uint32_t>(i),
+      TestTrade trade{revobase::Timestamp::now().nsec(), static_cast<uint32_t>(i),
                       100.0 + i, 1000, (i % 2 == 0) ? 'B' : 'S'};
 
       publish(*appender, trade.timestamp, MsgType::Trade, trade);
@@ -141,12 +141,12 @@ TEST_CASE_METHOD(AppenderFixture, "Appender basic writes",
   }
 
   SECTION("Can write with different message types") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     publish(*appender, trade.timestamp, MsgType::Trade, trade);
-    appender->mark(racer::TimeUtils::now().nsec(), MsgType::SessionStart);
+    appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionStart);
     publish(*appender, trade.timestamp, MsgType::Trade, trade);
-    appender->mark(racer::TimeUtils::now().nsec(), MsgType::SessionEnd);
+    appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionEnd);
 
     REQUIRE(appender->getCurrentSequence() == 4);
   }
@@ -166,7 +166,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender sequence tracking",
   }
 
   SECTION("Sequence increments with each write") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     for (int i = 0; i < 10; ++i) {
       publish(*appender, trade.timestamp, MsgType::Trade, trade);
@@ -175,7 +175,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender sequence tracking",
   }
 
   SECTION("Sequence is consistent across read") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     // Write 10 messages
     for (int i = 0; i < 10; ++i) {
@@ -270,14 +270,14 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with flags", "[appender][flags]") {
       location, 0, AppenderOptions{.prefault = true});
 
   SECTION("Can write with high priority flag") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
     publish(*appender, trade.timestamp, MsgType::Trade, trade,
             FRAME_HIGH_PRIORITY);
     REQUIRE(appender->getCurrentSequence() == 1);
   }
 
   SECTION("Flags are preserved") {
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
     publish(*appender, trade.timestamp, MsgType::Trade, trade,
             FRAME_HIGH_PRIORITY);
     appender.reset();
@@ -314,7 +314,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
     // Give AppenderWarmer thread time to start
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     for (int i = 0; i < 100; ++i) {
       publish(*appender, trade.timestamp, MsgType::Trade, trade);
@@ -335,7 +335,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
     // Wait for initial segment to be created and warmer to initialize
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     // Write first message to establish segment
     publish(*appender, trade.timestamp, MsgType::Trade, trade);
@@ -365,7 +365,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
       for (int i = 0; i < NUM_MESSAGES; ++i) {
-        TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+        TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
         publish(*appender, trade.timestamp, MsgType::Trade, trade);
       }
     }
@@ -395,7 +395,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
       for (int i = 0; i < NUM_MESSAGES; ++i) {
-        TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+        TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
         publish(*appender, trade.timestamp, MsgType::Trade, trade);
       }
     }
@@ -428,7 +428,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender performance",
 
   SECTION("Write throughput") {
     const int NUM_MESSAGES = 100000;
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
 
     auto start = std::chrono::high_resolution_clock::now();
 
@@ -473,7 +473,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender thread safety",
                                        });
 
       for (uint64_t i = 0; i < N; ++i) {
-        TestTrade trade{racer::TimeUtils::now().nsec(),
+        TestTrade trade{revobase::Timestamp::now().nsec(),
                         static_cast<uint32_t>(i), 100.0, 1000, 'B'};
         publish(*appender, trade.timestamp, MsgType::Trade, trade);
       }
@@ -518,7 +518,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender edge cases", "[appender][edge]") {
     struct Empty {};
     Empty empty;
 
-    publish(*appender, racer::TimeUtils::now().nsec(), MsgType::Trade, empty);
+    publish(*appender, revobase::Timestamp::now().nsec(), MsgType::Trade, empty);
     REQUIRE(appender->getCurrentSequence() == 1);
   }
 
@@ -529,7 +529,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender edge cases", "[appender][edge]") {
     Large large;
     memset(large.data, 'X', sizeof(large.data));
 
-    publish(*appender, racer::TimeUtils::now().nsec(), MsgType::Trade, large);
+    publish(*appender, revobase::Timestamp::now().nsec(), MsgType::Trade, large);
     REQUIRE(appender->getCurrentSequence() == 1);
   }
 
@@ -540,7 +540,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender edge cases", "[appender][edge]") {
 
     for (int i = 0; i < 10000; ++i) {
       Tiny tiny{static_cast<uint32_t>(i)};
-      publish(*appender, racer::TimeUtils::now().nsec(), MsgType::Trade, tiny);
+      publish(*appender, revobase::Timestamp::now().nsec(), MsgType::Trade, tiny);
     }
 
     REQUIRE(appender->getCurrentSequence() == 10000);
@@ -561,7 +561,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender write-read consistency",
           location, 0, AppenderOptions{.prefault = false});
 
       for (int i = 0; i < NUM_MESSAGES; ++i) {
-        TestTrade trade{racer::TimeUtils::now().nsec(),
+        TestTrade trade{revobase::Timestamp::now().nsec(),
                         static_cast<uint32_t>(i), 100.0 + i, 1000ULL + i,
                         (i % 2 == 0) ? 'B' : 'S'};
         publish(*appender, trade.timestamp, MsgType::Trade, trade);
@@ -603,18 +603,18 @@ TEST_CASE_METHOD(AppenderFixture, "Appender mark operations",
       location, 0, AppenderOptions{.prefault = true});
 
   SECTION("Can write session markers") {
-    appender->mark(racer::TimeUtils::now().nsec(), MsgType::SessionStart);
+    appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionStart);
 
-    TestTrade trade{racer::TimeUtils::now().nsec(), 1, 100.0, 1000, 'B'};
+    TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
     publish(*appender, trade.timestamp, MsgType::Trade, trade);
 
-    appender->mark(racer::TimeUtils::now().nsec(), MsgType::SessionEnd);
+    appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionEnd);
 
     REQUIRE(appender->getCurrentSequence() == 3);
   }
 
   SECTION("Marks are readable") {
-    appender->mark(racer::TimeUtils::now().nsec(), MsgType::SessionStart);
+    appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionStart);
     appender.reset();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -685,7 +685,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
     for (int i = 0; i < NUM_MESSAGES; ++i) {
       TestMsg msg;
-      msg.timestamp = racer::TimeUtils::now().nsec();
+      msg.timestamp = revobase::Timestamp::now().nsec();
       msg.seq = i;
       std::memset(msg.data, 'A', sizeof(msg.data));
 
@@ -749,7 +749,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     // Write 3 segments worth
     for (size_t i = 0; i < frames_per_segment * 3; ++i) {
       TestMsg msg;
-      msg.timestamp = racer::TimeUtils::now().nsec();
+      msg.timestamp = revobase::Timestamp::now().nsec();
       msg.seq = static_cast<uint32_t>(i);
       msg.segment_hint = static_cast<uint32_t>(i / frames_per_segment) + 1;
 
@@ -779,7 +779,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
     for (size_t i = 0; i < frames_per_segment + 10; ++i) {
       TestMsg msg;
-      msg.timestamp = racer::TimeUtils::now().nsec();
+      msg.timestamp = revobase::Timestamp::now().nsec();
       msg.seq = static_cast<uint32_t>(i);
 
       publish(*appender, msg.timestamp, MsgType::Trade, msg);
@@ -820,7 +820,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     };
 
     for (int i = 0; i < 1000; ++i) {
-      auto ts = racer::TimeUtils::now().nsec();
+      auto ts = revobase::Timestamp::now().nsec();
 
       if (i % 2 == 0) {
         SmallMsg msg{static_cast<uint32_t>(i)};
@@ -876,7 +876,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
       threads.emplace_back([&appender, &total_written, t]() {
         for (int i = 0; i < 1000; ++i) {
           TestMsg msg;
-          msg.timestamp = racer::TimeUtils::now().nsec();
+          msg.timestamp = revobase::Timestamp::now().nsec();
           msg.seq = t * 1000 + i;
 
           publish(*appender, msg.timestamp, MsgType::Trade, msg);
@@ -927,7 +927,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
       for (int i = 0; i < 1000; ++i) {
         TestMsg msg;
-        msg.timestamp = racer::TimeUtils::now().nsec();
+        msg.timestamp = revobase::Timestamp::now().nsec();
         msg.seq = i;
         publish(*appender, msg.timestamp, MsgType::Trade, msg);
       }
@@ -958,7 +958,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
       for (int i = 0; i < 1000; ++i) {
         TestMsg msg;
-        msg.timestamp = racer::TimeUtils::now().nsec();
+        msg.timestamp = revobase::Timestamp::now().nsec();
         msg.seq = i;
         publish(*appender, msg.timestamp, MsgType::Trade, msg);
       }
@@ -1005,7 +1005,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::thread appender_thread([&]() {
       for (int i = 0; i < 1000; ++i) {
         TestMsg msg;
-        msg.timestamp = racer::TimeUtils::now().nsec();
+        msg.timestamp = revobase::Timestamp::now().nsec();
         msg.seq = i;
 
         publish(*appender, msg.timestamp, MsgType::Trade, msg);
@@ -1071,7 +1071,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
   SECTION("Rotated segment isFull() and last_frame_position is within bounds") {
     auto appender = makeappender();
     for (uint64_t i = 0; i < N_ONE; ++i) {
-      TestTrade t{racer::TimeUtils::now().nsec(), uint32_t(i), 100.0, 1000,
+      TestTrade t{revobase::Timestamp::now().nsec(), uint32_t(i), 100.0, 1000,
                   'B'};
       publish(*appender, t.timestamp, MsgType::Trade, t);
     }
@@ -1090,7 +1090,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
   SECTION("SegmentEnd is the last committed frame on a full segment") {
     auto appender = makeappender();
     for (uint64_t i = 0; i < N_ONE; ++i) {
-      TestTrade t{racer::TimeUtils::now().nsec(), uint32_t(i), 100.0, 1000,
+      TestTrade t{revobase::Timestamp::now().nsec(), uint32_t(i), 100.0, 1000,
                   'B'};
       publish(*appender, t.timestamp, MsgType::Trade, t);
     }
@@ -1121,7 +1121,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
   SECTION("New segment header is valid immediately after rotation") {
     auto appender = makeappender();
     for (uint64_t i = 0; i < N_ONE; ++i) {
-      TestTrade t{racer::TimeUtils::now().nsec(), uint32_t(i), 100.0, 1000,
+      TestTrade t{revobase::Timestamp::now().nsec(), uint32_t(i), 100.0, 1000,
                   'B'};
       publish(*appender, t.timestamp, MsgType::Trade, t);
     }
@@ -1141,7 +1141,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
   SECTION("Retired segments remain fully readable with contiguous sequences") {
     auto appender = makeappender();
     for (uint64_t i = 0; i < N_TWO; ++i) {
-      TestTrade t{racer::TimeUtils::now().nsec(), uint32_t(i), 100.0, 1000,
+      TestTrade t{revobase::Timestamp::now().nsec(), uint32_t(i), 100.0, 1000,
                   'B'};
       publish(*appender, t.timestamp, MsgType::Trade, t);
     }

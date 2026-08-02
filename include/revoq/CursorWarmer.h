@@ -15,12 +15,13 @@
 #include <sys/stat.h>
 #endif
 
-#include "MmapBuffer.h"
-#include "RealtimePriority.h"
 #include "Segment.h"
 #include "StreamBase.h"
 #include "detail/StreamPlatform.h"
-#include "portable_intrinsics.h"
+
+#include <revobase/MmapBuffer.h>
+#include <revobase/RealtimePriority.h>
+#include <revobase/portable_intrinsics.h>
 
 namespace racer::revoq {
 
@@ -89,8 +90,8 @@ public:
         warmer_ready_id_ = -1;
       } catch (...) {
 
-        os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_, false,
-                                          os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            warmer_addr_, segment_size_, false, revobase::os::MsyncMode::NONE);
         warmer_addr_ = 0;
         warmer_ready_id_ = -1;
       }
@@ -147,8 +148,8 @@ private:
     }
 
     if (dedicated_)
-      system::RealtimePriority::setRealtimePriority(
-          20, system::SchedulerPolicy::FIFO);
+      revobase::system::RealtimePriority::setRealtimePriority(
+          20, revobase::system::SchedulerPolicy::FIFO);
 
     while (true) {
       int64_t segment_to_warm;
@@ -223,9 +224,9 @@ private:
 #ifdef __linux__
         std::uintptr_t addr = 0;
         try {
-          addr = os::MmapBuffer::loadExistingReadOnlyMmapBuffer(path_str,
-                                                                segment_size_);
-        } catch (const os::MmapError &) {
+          addr = revobase::os::MmapBuffer::loadExistingReadOnlyMmapBuffer(
+              path_str, segment_size_);
+        } catch (const revobase::os::MmapError &) {
           goto next_signal;
         }
 
@@ -237,8 +238,8 @@ private:
               std::lock_guard<std::mutex> lk(mutex_);
               if (warmer_pending_ ||
                   !running_.load(std::memory_order_relaxed)) {
-                os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, false,
-                                                  os::MsyncMode::NONE);
+                revobase::os::MmapBuffer::releaseMmapBuffer(
+                    addr, segment_size_, false, revobase::os::MsyncMode::NONE);
                 goto next_signal;
               }
             }
@@ -251,32 +252,33 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
           }
           if (!header_ok) {
-            os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, false,
-                                              os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                addr, segment_size_, false, revobase::os::MsyncMode::NONE);
             goto next_signal;
           }
         }
 
         try {
-          os::MmapBuffer::prepareReadOnlyMmapBuffer(
+          revobase::os::MmapBuffer::prepareReadOnlyMmapBuffer(
               path_str, addr, segment_size_,
               {.populate_read = true, .advise_hugepage = true});
-        } catch (const os::MmapError &) {
-          os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, false,
-                                            os::MsyncMode::NONE);
+        } catch (const revobase::os::MmapError &) {
+          revobase::os::MmapBuffer::releaseMmapBuffer(
+              addr, segment_size_, false, revobase::os::MsyncMode::NONE);
           goto next_signal;
         }
 
         {
           std::lock_guard<std::mutex> lk(mutex_);
           if (warmer_pending_ || !running_.load(std::memory_order_relaxed)) {
-            os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, false,
-                                              os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                addr, segment_size_, false, revobase::os::MsyncMode::NONE);
             goto next_signal;
           }
           if (warmer_addr_ != 0)
-            os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_,
-                                              false, os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                warmer_addr_, segment_size_, false,
+                revobase::os::MsyncMode::NONE);
           warmer_addr_ = addr;
           warmer_ready_id_ = segment_to_warm;
         }
@@ -288,8 +290,8 @@ private:
 
   void releaseWarmedSegment() {
     if (warmer_addr_ != 0) {
-      os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_, false,
-                                        os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          warmer_addr_, segment_size_, false, revobase::os::MsyncMode::NONE);
       warmer_addr_ = 0;
       warmer_ready_id_ = -1;
     }

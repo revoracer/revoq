@@ -26,6 +26,10 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog/CMakeLists.txt")
     message(FATAL_ERROR "Missing external/spdlog. Run: git submodule update --init --recursive")
 endif()
 
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/revobase/CMakeLists.txt")
+    message(FATAL_ERROR "Missing external/revobase. Run: git submodule update --init --recursive")
+endif()
+
 
 set(FMT_DOC OFF CACHE BOOL "" FORCE)
 set(FMT_TEST OFF CACHE BOOL "" FORCE)
@@ -41,41 +45,38 @@ set(SPDLOG_INSTALL OFF CACHE BOOL "" FORCE)
 set(SPDLOG_FMT_EXTERNAL ON CACHE BOOL "" FORCE)
 add_subdirectory(external/spdlog EXCLUDE_FROM_ALL)
 
-add_library(revoq)
-add_library(revoq::revoq ALIAS revoq)
+set(REVOBASE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(REVOBASE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory(external/revobase EXCLUDE_FROM_ALL)
 
 file(GLOB_RECURSE REVOQ_PUBLIC_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/revoq/*.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/include/revoq/*.hpp"
 )
 
-file(GLOB_RECURSE REVOQ_SOURCES CONFIGURE_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cxx"
-)
-
+add_library(revoq INTERFACE)
 target_sources(revoq
-    PRIVATE
-        ${REVOQ_SOURCES}
-    PUBLIC
+    INTERFACE
         FILE_SET HEADERS
         BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include"
         FILES ${REVOQ_PUBLIC_HEADERS}
 )
 
 target_include_directories(revoq
-    PUBLIC
+    INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
 )
 
 target_link_libraries(revoq
-    PUBLIC
+    INTERFACE
+        revobase::revobase
         fmt::fmt
         spdlog::spdlog
         Threads::Threads
 )
+
+add_library(revoq::revoq ALIAS revoq)
 
 if(REVOQ_BUILD_TESTS)
     include(CTest)

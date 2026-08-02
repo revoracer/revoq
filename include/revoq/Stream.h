@@ -19,8 +19,9 @@
 #include "Frame.h"
 #include "Segment.h"
 #include "StreamBase.h"
-#include "TimeUtils.h"
 #include "detail/StreamPlatform.h"
+
+#include <revobase/TimeUtils.h>
 
 namespace racer::revoq {
 
@@ -118,9 +119,9 @@ public:
       return;
     SPDLOG_TRACE(
         "seeking timestamp {} in segment [{}] [beginTime({}) - endTime({})]",
-        racer::Timestamp(timestamp), segment_id,
-        racer::Timestamp(current_segment_->beginTime()),
-        racer::Timestamp(current_segment_->endTime()));
+        revobase::Timestamp(timestamp), segment_id,
+        revobase::Timestamp(current_segment_->beginTime()),
+        revobase::Timestamp(current_segment_->endTime()));
     while (current_segment_->isFull() &&
            current_segment_->endTime() < timestamp) {
       loadNextSegment();

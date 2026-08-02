@@ -15,7 +15,7 @@
 #include <revoq/Frame.h>
 #include <revoq/MergingCursor.h>
 #include <revoq/StreamBase.h>
-#include <revoq/TimeUtils.h>
+#include <revobase/TimeUtils.h>
 
 using namespace racer::revoq;
 namespace fs = std::filesystem;
@@ -79,7 +79,7 @@ inline void writeFillerSegment(const LocationPtr &location, uint32_t dest_id,
                                int count = 8) {
   auto appender = std::make_shared<Appender<>>(
       location, dest_id, AppenderOptions{.prefault = true});
-  const int64_t base = racer::TimeUtils::now().nsec();
+  const int64_t base = revobase::Timestamp::now().nsec();
   for (int i = 0; i < count; ++i) {
     const FillerMessage m{base + i, static_cast<uint32_t>(i)};
     publish(*appender, m.ts, MsgType::Trade, m);

@@ -157,7 +157,13 @@ done
 cd "${ROOT_DIR}"
 
 mkdir -p external
-submodules=(external/fmt external/spdlog external/Catch2 external/pybind11)
+submodules=(
+  external/revobase
+  external/fmt
+  external/spdlog
+  external/Catch2
+  external/pybind11
+)
 # The benchmarks link HdrHistogram-C (CMakeLists.txt hard-fails without it), so
 # fetch it too when benchmarks are in the build.
 if [[ "${BUILD_BENCHMARKS}" == "ON" ]]; then

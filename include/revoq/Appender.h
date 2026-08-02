@@ -18,12 +18,11 @@
 #include "Frame.h"
 #include "Segment.h"
 #include "StreamBase.h"
-#include "TimeUtils.h"
 #include "detail/StreamPlatform.h"
 
+#include <revobase/TimeUtils.h>
+#include <revobase/portable_intrinsics.h>
 #include <spdlog/spdlog.h>
-
-#include "portable_intrinsics.h"
 
 namespace racer::revoq {
 
@@ -408,7 +407,7 @@ private:
         auto *end_hdr = std::launder(
             reinterpret_cast<FrameHeader *>(current_frame_address_));
         new (end_hdr) FrameHeader{};
-        end_hdr->gen_time = Timestamp::now().nsec();
+        end_hdr->gen_time = revobase::Timestamp::now().nsec();
         end_hdr->event_time = 0;
         end_hdr->msg_type = static_cast<uint16_t>(MsgType::SegmentEnd);
         end_hdr->flags = FRAME_NORMAL;
