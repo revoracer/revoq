@@ -1,0 +1,27 @@
+setting CPU governors
+cpu13: scaling_governor=performance
+cpu14: scaling_governor=performance
+cpu3: scaling_governor=performance
+cpu12: scaling_governor=performance
+allocating 2MB hugepages: 2048
+ensuring hugetlbfs mount: <hugetlbfs>
+<hugetlbfs> is already hugetlbfs
+
+session tuning complete
+hugepage_path=<hugetlbfs>/revoq-bench
+boot_parameters=isolcpus=13,14,3,12 nohz_full=13,14,3,12 rcu_nocbs=13,14,3,12
+
+Run the tuned benchmark with sudo, for example:
+sudo ./build/revoq_benchmark_stream_handler_benchmark_p99 --tuned --fork \
+  --path <hugetlbfs>/revoq-bench \
+  --appender-cpu 13 --cursor-cpu 14 \
+  --appender-warmer-cpu 3 --cursor-warmer-cpu 12 \
+  --rt-priority 80 --messages 100000000 --warmup 50000 --interval-ns 100
+cpu3: scaling_governor=performance
+cpu11: scaling_governor=performance
+cpu4: scaling_governor=performance
+cpu12: scaling_governor=performance
+cpu5: scaling_governor=performance
+cpu13: scaling_governor=performance
+cpu6: scaling_governor=performance
+cpu14: scaling_governor=performance

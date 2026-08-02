@@ -1,0 +1,33 @@
+revoq system check
+repo=<local checkout>
+timestamp_utc=2026-08-02T07:55:09Z
+kernel=Linux 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026 x86_64 GNU/Linux
+cpu_model=AMD x86_64 CPU (8 cores, 16 threads)
+logical_cpus=16
+isolated_cpus=2-6,10-14
+cpu_governors:
+  cpu0=schedutil
+  cpu10=schedutil
+  cpu11=performance
+  cpu12=performance
+  cpu13=performance
+  cpu14=performance
+  cpu15=schedutil
+  cpu1=schedutil
+  cpu2=schedutil
+  cpu3=performance
+  cpu4=performance
+  cpu5=performance
+  cpu6=performance
+  cpu7=schedutil
+  cpu8=schedutil
+  cpu9=schedutil
+hugepages_total=2048
+hugepages_free=2048
+hugepagesize=2048 kB
+hugetlbfs_mounts:
+  <hugetlbfs>
+memlock_kb=unlimited
+chrt=available
+compiler=Ubuntu clang version 20.1.8 (2ubuntu8)
+cmake=cmake version 4.2.3

@@ -1,0 +1,45 @@
+# revoq
+
+Open-source, file-backed, memory-mapped IPC stream for low-latency same-host
+messaging and replay.
+
+## Primary documents
+
+- README: https://github.com/revoracer/revoq/blob/main/README.md
+- Architecture: https://github.com/revoracer/revoq/blob/main/docs/architecture.md
+- Memory model: https://github.com/revoracer/revoq/blob/main/docs/memory_model.md
+- File format: https://github.com/revoracer/revoq/blob/main/docs/file_format.md
+- Benchmarking: https://github.com/revoracer/revoq/blob/main/docs/benchmarking.md
+- Tuning overview: https://github.com/revoracer/revoq/blob/main/docs/tuning_overview.md
+- Commercial support: https://github.com/revoracer/revoq/blob/main/docs/commercial_support.md
+- Agent instructions: https://github.com/revoracer/revoq/blob/main/AGENTS.md
+- Security policy: https://github.com/revoracer/revoq/blob/main/SECURITY.md
+- Contributing: https://github.com/revoracer/revoq/blob/main/CONTRIBUTING.md
+- Code of conduct: https://github.com/revoracer/revoq/blob/main/CODE_OF_CONDUCT.md
+- Public appender-to-handler tuned artifact: https://github.com/revoracer/revoq/blob/main/benchmarks/micro/results/2026-08-02-public-appender-to-handler-10mmsg-5x/README.md
+
+## Source areas
+
+- Public headers: https://github.com/revoracer/revoq/tree/main/include/revoq
+- C++ examples: https://github.com/revoracer/revoq/tree/main/examples
+- Python bindings: https://github.com/revoracer/revoq/tree/main/python
+- C++ tests: https://github.com/revoracer/revoq/tree/main/tests
+- Micro benchmarks: https://github.com/revoracer/revoq/tree/main/benchmarks/micro
+- Comparative benchmarks: https://github.com/revoracer/revoq/tree/main/benchmarks/comparative
+- Build script: https://github.com/revoracer/revoq/blob/main/build.sh
+
+## Integration notes
+
+- Requires Linux for latency work, CMake 3.23 or newer, and a C++23 compiler.
+- Initialize submodules before building.
+- Link CMake target `revoq::revoq`.
+- `revoq` API headers live under `include/revoq/`, but the build links
+  compiled `revobase` support code.
+- Core writer API: `Appender`.
+- Core reader API: `MergingCursor`.
+- Publication contract: write metadata and payload before release-storing frame
+  `length`; readers acquire-load `length` before reading a frame.
+- Portable benchmark runs are not publishable latency claims.
+- Tuned latency claims require isolated-core host capture, the four-role
+  topology described in the docs, and an SMT sibling map for the role CPUs.
+- `revoq` is not a network transport, broker, database, or AI-agent framework.

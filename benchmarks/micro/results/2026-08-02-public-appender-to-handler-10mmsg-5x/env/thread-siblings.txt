@@ -1,0 +1,8 @@
+cpu3 siblings=3,11
+cpu4 siblings=4,12
+cpu5 siblings=5,13
+cpu6 siblings=6,14
+cpu11 siblings=3,11
+cpu12 siblings=4,12
+cpu13 siblings=5,13
+cpu14 siblings=6,14

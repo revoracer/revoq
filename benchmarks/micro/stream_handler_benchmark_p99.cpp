@@ -1156,7 +1156,7 @@ void printSummary(const BenchmarkConfig &cfg, const BenchmarkOutput &output) {
                               ? 0.0
                               : 1000.0 / static_cast<double>(cfg.interval_ns);
 
-  fmt::print("benchmark=revoq_journal_handler_p99\n");
+  fmt::print("benchmark=revoq_appender_to_handler_p99\n");
   fmt::print("mode={}\n", cfg.tuned ? "tuned" : "portable");
   if (cfg.tuned) {
     fmt::print("path={} appender_cpu={} cursor_cpu={} "

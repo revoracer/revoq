@@ -1,0 +1,1 @@
+sudo -n ./build/revoq_benchmark_stream_handler_benchmark_p99 --tuned --fork --path <hugetlbfs>/revoq-refresh-13-14-3-12-tuned-1m-run2 --appender-cpu 13 --cursor-cpu 14 --appender-warmer-cpu 3 --cursor-warmer-cpu 12 --rt-priority 80 --messages 10000000 --warmup 200000 --interval-ns 1000 --payload-bytes 32

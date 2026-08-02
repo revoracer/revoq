@@ -158,11 +158,12 @@ on failure and prints an `ok ...` line on success.
 
 ## Benchmarking
 
-The latency benchmark has two modes, and is deliberate about what each one is
-allowed to claim.
+The latency benchmark can run in portable or tuned mode.
 
-The tuned path uses four isolated roles: appender, cursor, appender warmer, and
-cursor warmer. Low-latency claims without the machine capture are not useful.
+The tuned path uses four pinned isolated logical roles: appender, cursor,
+appender warmer, and cursor warmer. Public latency artifacts should include the
+SMT sibling map so readers can verify whether those logical roles occupy
+distinct physical cores.
 
 **Portable mode** — no root, no pinning, no hugepages. Good for functional checks
 and rough local comparisons. *Not* a source of host-to-host p99 claims.
@@ -181,7 +182,7 @@ tuned run, prepare the host with `scripts/setup_benchmark_session.sh` — see
 ```bash
 sudo ./build/revoq_benchmark_stream_handler_benchmark_p99 \
   --tuned --fork \
-  --path /dev/hugepages/revoq-bench \
+  --path <hugetlbfs>/revoq-bench \
   --appender-cpu 2 --cursor-cpu 4 \
   --appender-warmer-cpu 6 --cursor-warmer-cpu 8 \
   --rt-priority 80 \
@@ -197,16 +198,36 @@ reports the distribution — `p50`, `p90`, `p99`, `p999`, `p9999`, `p99999`,
 (`latency_hdr_b64`) so the full distribution can be re-derived. In this domain
 the tail is the number that matters, not the average.
 
-### Reference results
+### Publishing tuned results
 
-> [!NOTE]
-> Refresh the reference numbers with the four-role tuned topology before publishing.
-> Do not reuse older shared-warmer results.
+Publish tuned results with the command, benchmark output, and host capture
+together:
 
-Reproduce the run with `./scripts/check_system.sh` and
-`./scripts/collect_benchmark_env.sh`, and see
+```bash
+./scripts/check_system.sh
+./scripts/collect_benchmark_env.sh > benchmark-env.txt
+```
+
+Published artifacts should preserve the material reproduction details: CPU
+vendor/class, CPU topology, kernel, hugepage state, governor, memlock, compiler,
+command shape, and output fields. Local checkout paths, hostnames, chassis
+identifiers, exact CPU SKUs, and local filesystem paths can be redacted.
+
+Use the four-role topology shown above for appender, cursor, appender warmer,
+and cursor warmer, and publish the role-to-core mapping with the result. See
 [docs/benchmarking.md](docs/benchmarking.md) and
 [docs/tuning_overview.md](docs/tuning_overview.md) for the full methodology.
+
+Current public appender-to-handler tuned artifact:
+
+| Artifact | Measured span | Workload | Headline |
+| --- | --- | --- | --- |
+| [`2026-08-02-public-appender-to-handler-10mmsg-5x`](benchmarks/micro/results/2026-08-02-public-appender-to-handler-10mmsg-5x/README.md) | appender timestamp / intended-send time to cursor handler endpoint | 5 tuned runs, 10,000,000 measured messages per run, 32 B payload, 10M msg/s offered rate, four pinned roles verified by the published SMT sibling map | p99: 138-139 ns; p99.9: 217-219 ns |
+
+The artifact includes benchmark stdout, command lines, host capture, and git
+commit/tree-state capture with local filesystem paths redacted. For the 32 B
+appender-to-handler path, it shows sub-150 ns p99 across five tuned 10M msg/s
+runs on the captured host.
 
 ### Comparative benchmarks
 
@@ -257,7 +278,7 @@ revoq shows **tighter tail latency**, **higher saturation throughput up to
 parity, where both systems are memory-bandwidth-bound. Full tables (all four
 payload sizes, both rates, plus the durable `journal_replayable` group where
 Chronicle's tail degrades sharply under load at large payloads), the committed
-result JSON, and the honest caveats live in
+result JSON, and methodology notes live in
 [benchmarks/comparative/](benchmarks/comparative/README.md#latest-results).
 
 ## Beyond Trading

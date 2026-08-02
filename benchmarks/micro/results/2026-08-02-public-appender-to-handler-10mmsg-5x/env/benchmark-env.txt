@@ -1,0 +1,84 @@
+timestamp_utc=2026-08-02T07:55:09Z
+repo=<local checkout>
+git_commit=81cf74dffc27d26e3f2928bb5f5a370dda7d6d67
+git_tree=dirty
+kernel=Linux 7.0.0-28-generic #28-Ubuntu SMP PREEMPT_DYNAMIC Sun Jun 21 01:01:36 UTC 2026 x86_64 GNU/Linux
+hostname=<redacted>
+cpu_model=AMD x86_64 CPU (8 cores, 16 threads)
+logical_cpus=16
+isolated_cpus=2-6,10-14
+nohz_full_cpus=3-6,11-14
+memlock_kb=unlimited
+compiler=Ubuntu clang version 20.1.8 (2ubuntu8)
+cmake=cmake version 4.2.3
+memtotal=29972128 kB
+hugepages_total=2048
+hugepages_free=2048
+hugepages_rsvd=0
+hugepages_surp=0
+hugepagesize=2048 kB
+cpu0_governor=schedutil
+cpu10_governor=schedutil
+cpu11_governor=performance
+cpu12_governor=performance
+cpu13_governor=performance
+cpu14_governor=performance
+cpu15_governor=schedutil
+cpu1_governor=schedutil
+cpu2_governor=schedutil
+cpu3_governor=performance
+cpu4_governor=performance
+cpu5_governor=performance
+cpu6_governor=performance
+cpu7_governor=schedutil
+cpu8_governor=schedutil
+cpu9_governor=schedutil
+hugetlbfs_mount=<hugetlbfs> options=rw,nosuid,nodev,relatime,pagesize=2M
+lscpu_begin
+Architecture:                            x86_64
+CPU op-mode(s):                          32-bit, 64-bit
+Address sizes:                           48 bits physical, 48 bits virtual
+Byte Order:                              Little Endian
+CPU(s):                                  16
+On-line CPU(s) list:                     0-15
+Vendor ID:                               AuthenticAMD
+Model name:                              AMD x86_64 CPU (8 cores, 16 threads)
+CPU family:                              <redacted>
+Model:                                   <redacted>
+Thread(s) per core:                      2
+Core(s) per socket:                      8
+Socket(s):                               1
+Stepping:                                <redacted>
+Frequency boost:                         enabled
+CPU(s) scaling MHz:                      83%
+CPU max MHz:                             <redacted>
+CPU min MHz:                             <redacted>
+BogoMIPS:                                <redacted>
+Flags:                                   <redacted>
+Virtualization:                          AMD-V
+L1d cache:                               <redacted>
+L1i cache:                               <redacted>
+L2 cache:                                <redacted>
+L3 cache:                                <redacted>
+NUMA node(s):                            1
+NUMA node0 CPU(s):                       0-15
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Mitigation; Safe RET
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP always-on; PBRSB-eIBRS Not affected; BHI Not affected
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Mitigation; Clear CPU buffers
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Mitigation; IBPB before exit to userspace
+lscpu_end
