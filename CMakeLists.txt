@@ -26,8 +26,11 @@ if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/spdlog/CMakeLists.txt")
     message(FATAL_ERROR "Missing external/spdlog. Run: git submodule update --init --recursive")
 endif()
 
-if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/external/revobase/CMakeLists.txt")
-    message(FATAL_ERROR "Missing external/revobase. Run: git submodule update --init --recursive")
+set(REVOQ_REVOBASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/revobase" CACHE PATH
+    "Source directory for revobase. Override to build against a local revobase checkout instead of the pinned submodule.")
+
+if(NOT EXISTS "${REVOQ_REVOBASE_DIR}/CMakeLists.txt")
+    message(FATAL_ERROR "Missing revobase sources at ${REVOQ_REVOBASE_DIR}. Run: git submodule update --init --recursive")
 endif()
 
 
@@ -47,7 +50,7 @@ add_subdirectory(external/spdlog EXCLUDE_FROM_ALL)
 
 set(REVOBASE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(REVOBASE_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory(external/revobase EXCLUDE_FROM_ALL)
+add_subdirectory("${REVOQ_REVOBASE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/external/revobase" EXCLUDE_FROM_ALL)
 
 file(GLOB_RECURSE REVOQ_PUBLIC_HEADERS CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/include/revoq/*.h"

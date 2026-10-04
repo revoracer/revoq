@@ -12,6 +12,7 @@ RUN_TESTS="OFF"
 RUN_PYTHON_TESTS="OFF"
 CONFIGURE_ONLY="OFF"
 JOBS=""
+REVOBASE_PATH=""
 
 usage() {
   cat <<EOF
@@ -33,6 +34,8 @@ Options:
   --no-tests          Do not build C++ tests
   --no-examples       Do not build examples
   --configure-only    Configure without building
+  --revobase-path DIR  Build against this revobase checkout instead of the
+                        pinned submodule (skips updating external/revobase)
   -h, --help          Show this help
 
 Examples:
@@ -142,6 +145,18 @@ while [[ $# -gt 0 ]]; do
       CONFIGURE_ONLY="ON"
       shift
       ;;
+    --revobase-path)
+      if [[ $# -lt 2 ]]; then
+        echo "--revobase-path requires a value" >&2
+        exit 2
+      fi
+      REVOBASE_PATH="$2"
+      shift 2
+      ;;
+    --revobase-path=*)
+      REVOBASE_PATH="${1#*=}"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -169,14 +184,27 @@ submodules=(
 if [[ "${BUILD_BENCHMARKS}" == "ON" ]]; then
   submodules+=(external/HdrHistogram_c)
 fi
+if [[ -n "${REVOBASE_PATH}" ]]; then
+  filtered=()
+  for s in "${submodules[@]}"; do
+    [[ "${s}" == "external/revobase" ]] || filtered+=("${s}")
+  done
+  submodules=("${filtered[@]}")
+fi
 git submodule update --init --recursive "${submodules[@]}"
 
-cmake -S "${ROOT_DIR}" -B "${BUILD_DIR}" \
-  -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-  -DREVOQ_BUILD_TESTS="${BUILD_TESTS}" \
-  -DREVOQ_BUILD_EXAMPLES="${BUILD_EXAMPLES}" \
-  -DREVOQ_BUILD_BENCHMARKS="${BUILD_BENCHMARKS}" \
+cmake_args=(
+  -S "${ROOT_DIR}" -B "${BUILD_DIR}"
+  -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+  -DREVOQ_BUILD_TESTS="${BUILD_TESTS}"
+  -DREVOQ_BUILD_EXAMPLES="${BUILD_EXAMPLES}"
+  -DREVOQ_BUILD_BENCHMARKS="${BUILD_BENCHMARKS}"
   -DREVOQ_BUILD_PYTHON="${BUILD_PYTHON}"
+)
+if [[ -n "${REVOBASE_PATH}" ]]; then
+  cmake_args+=(-DREVOQ_REVOBASE_DIR="$(cd "${REVOBASE_PATH}" && pwd)")
+fi
+cmake "${cmake_args[@]}"
 
 if [[ "${CONFIGURE_ONLY}" == "ON" ]]; then
   exit 0
