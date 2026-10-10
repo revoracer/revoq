@@ -23,7 +23,11 @@
 
 #include <revobase/TimeUtils.h>
 
-namespace racer::revoq {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+#include "detail/StreamDiagnostics.h"
+#endif
+
+namespace revoq {
 
 struct StreamOptions {
   bool is_writing;
@@ -31,7 +35,8 @@ struct StreamOptions {
   bool background_threads = true;
   size_t retained_segment_limit = 0;
   int warmer_timeout_ms = 5000;
-
+  // Warmer busy-polls (dedicated core); retire timed-polls (housekeeping core,
+  // -1 => housekeeping fallback). See CursorWarmer / retireLoop.
   int warmer_cpu = -1;
   int retire_cpu = -1;
 };
@@ -61,6 +66,10 @@ public:
     assert(retire_pinned && "cursor retire thread affinity pin failed");
 #endif
 
+    // Cursor warmer: pre-maps the next segment with MADV_POPULATE_READ so the
+    // cursor hot path incurs zero page faults at rotation time. start() creates
+    // the thread and pins it immediately from this thread, which is critical
+    // for avoiding missed rotations.
     if (!prefault_) {
       warmer_ = std::make_unique<CursorWarmer>(
           location_, dest_id_, segment_size_, warmer_timeout_ms_);
@@ -69,13 +78,15 @@ public:
   }
 
   ~Stream() {
-
+    // Stop the warmer first: it owns and releases its warmed mapping in its own
+    // destructor. stop() is lost-notify-safe internally.
     warmer_.reset();
     {
       std::lock_guard<std::mutex> lock(retire_mutex_);
       if (current_segment_)
         retire_queue_.push_back(std::move(current_segment_));
-
+      // let's not stall the current thread.
+      // let the retire thread own the actual munmap work
       while (!retired_segments_.empty()) {
         retire_queue_.push_back(std::move(retired_segments_.front()));
         retired_segments_.pop_front();
@@ -94,6 +105,43 @@ public:
   [[nodiscard]] bool isDataAvailable() const {
     return current_segment_ && frame_->hasData();
   }
+
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+  [[nodiscard]] StreamRuntimeStats getStats() const {
+    StreamRuntimeStats s;
+    s.load_segments = stat_load_segments_.load(std::memory_order_relaxed);
+    s.slow_loads = stat_slow_loads_.load(std::memory_order_relaxed);
+    s.retire_enqueues = stat_retire_enqueues_.load(std::memory_order_relaxed);
+    s.retire_segments = stat_retire_segments_.load(std::memory_order_relaxed);
+    s.load_max_ns = stat_load_max_ns_.load(std::memory_order_relaxed);
+    s.slow_load_max_ns = stat_slow_load_max_ns_.load(std::memory_order_relaxed);
+    s.retire_max_ns = stat_retire_max_ns_.load(std::memory_order_relaxed);
+
+    // Warmer-owned counters (empty when no warmer, i.e. prefault or no
+    // background threads — matching the pre-extraction all-zero state).
+    if (warmer_) {
+      const CursorWarmerStats w = warmer_->getStats();
+#define X(f) s.f = w.f;
+      REVOQ_WARMER_UNIFORM_COUNTERS(X)
+#undef X
+      s.warmer_ready_ahead_min_ns = w.warmer_ready_ahead_min_ns;
+      s.warmer_last_cpu = w.warmer_last_cpu;
+    }
+    return s;
+  }
+
+  void resetStats() {
+    stat_load_segments_.store(0, std::memory_order_relaxed);
+    stat_slow_loads_.store(0, std::memory_order_relaxed);
+    stat_retire_enqueues_.store(0, std::memory_order_relaxed);
+    stat_retire_segments_.store(0, std::memory_order_relaxed);
+    stat_load_max_ns_.store(0, std::memory_order_relaxed);
+    stat_slow_load_max_ns_.store(0, std::memory_order_relaxed);
+    stat_retire_max_ns_.store(0, std::memory_order_relaxed);
+    if (warmer_)
+      warmer_->resetStats();
+  }
+#endif
 
   void next() {
     if (!current_segment_)
@@ -155,10 +203,34 @@ private:
   std::atomic<bool> retire_running_{false};
   std::thread retire_thread_;
 
+  // Cursor warmer: owns its thread, single-slot handoff state, and warmer
+  // diagnostics. Null when prefault or background threads are disabled.
   CursorWarmerPtr warmer_;
 
-  void retireLoop() {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+  std::atomic<uint64_t> stat_load_segments_{0};
+  std::atomic<uint64_t> stat_slow_loads_{0};
+  std::atomic<uint64_t> stat_retire_enqueues_{0};
+  std::atomic<uint64_t> stat_retire_segments_{0};
+  std::atomic<uint64_t> stat_load_max_ns_{0};
+  std::atomic<uint64_t> stat_slow_load_max_ns_{0};
+  std::atomic<uint64_t> stat_retire_max_ns_{0};
 
+  static uint64_t nowNs() { return detail::revoqNowNs(); }
+
+  static void recordMax(std::atomic<uint64_t> &target, uint64_t value) {
+    detail::recordMax(target, value);
+  }
+#endif
+
+  void retireLoop() {
+    // Timed-poll instead of parking on a producer notify: the cursor hot thread
+    // enqueues WITHOUT notifying (no FUTEX_WAKE on the rotation path), and this
+    // thread drains on a short timer. Retire tolerates the <= kPollInterval
+    // latency — at ~2 s/rotation it leaves at most one extra segment mapped for
+    // a few ms. retire_cv_ is kept only so the destructor's notify_all wakes us
+    // immediately at shutdown (no teardown stall). Runs on a housekeeping core,
+    // so it must NOT busy-spin.
     constexpr auto kPollInterval = std::chrono::milliseconds(10);
     while (true) {
       std::unique_lock<std::mutex> lock(retire_mutex_);
@@ -170,7 +242,15 @@ private:
         SegmentPtr segment = std::move(retire_queue_.front());
         retire_queue_.pop_front();
         lock.unlock();
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t t0 = nowNs();
+#endif
         segment.reset();
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t dt = nowNs() - t0;
+        stat_retire_segments_.fetch_add(1, std::memory_order_relaxed);
+        recordMax(stat_retire_max_ns_, dt);
+#endif
         lock.lock();
       }
       if (!retire_running_.load(std::memory_order_relaxed))
@@ -179,7 +259,8 @@ private:
   }
 
   [[nodiscard]] bool segmentFileExists(int segment_id) const {
-
+    // Reconstruct the segment path directly; getSegmentPath() routes through
+    // makeLayoutDir() and would reintroduce a stat/mkdir path on rotation.
     const auto path =
         stream_dir_ / Segment::segmentFileName(dest_id_, segment_id);
     return access(path.c_str(), F_OK) == 0;
@@ -192,19 +273,35 @@ private:
 
   void loadSegment(int segment_id) {
     if (!current_segment_ || current_segment_->getSegmentId() != segment_id) {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+      const uint64_t load_t0 = nowNs();
+#endif
       SegmentPtr new_segment;
-
+      // Fast path: use the warmer's pre-populated mapping (zero page faults).
+      // tryLoadWarmedSegment claims + constructs the Segment under its own lock
+      // and records hit/invalid/miss diagnostics; returns null on a miss.
       if (warmer_)
         new_segment = warmer_->tryLoadWarmedSegment(segment_id);
-
+      // Slow path: no-prefault mmap, soft page faults on first access per 4 KB.
       if (!new_segment) {
         if (!is_writing_ && !segmentFileExists(segment_id)) {
           clearCurrentSegment();
           return;
         }
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        stat_slow_loads_.fetch_add(1, std::memory_order_relaxed);
+        const uint64_t slow_t0 = nowNs();
+#endif
         new_segment = Segment::load(location_, dest_id_, segment_id,
                                     is_writing_, prefault_);
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t slow_dt = nowNs() - slow_t0;
+        recordMax(stat_slow_load_max_ns_, slow_dt);
+#endif
       }
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+      stat_load_segments_.fetch_add(1, std::memory_order_relaxed);
+#endif
       SegmentPtr old_segment = std::move(current_segment_);
       current_segment_ = std::move(new_segment);
       frame_->setAddress(current_segment_->firstFrameAddress());
@@ -219,12 +316,22 @@ private:
               std::lock_guard<std::mutex> lock(retire_mutex_);
               retire_queue_.push_back(std::move(retired_segment));
             }
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+            stat_retire_enqueues_.fetch_add(1, std::memory_order_relaxed);
+#endif
+            // No retire_cv_.notify_one(): the retire thread timed-polls the
+            // queue, so the cursor hot thread issues no FUTEX_WAKE here.
           }
         }
+        // if !background_threads_: old_segment destroyed inline here
       }
-
+      // Signal the warmer to start pre-mapping the next segment (cursor only).
       if (warmer_)
         warmer_->signalNext(segment_id + 1);
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+      const uint64_t load_dt = nowNs() - load_t0;
+      recordMax(stat_load_max_ns_, load_dt);
+#endif
     }
   }
 
@@ -240,4 +347,4 @@ private:
 
 using StreamPtr = std::shared_ptr<Stream>;
 
-} // namespace racer::revoq
+} // namespace revoq

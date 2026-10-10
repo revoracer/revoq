@@ -9,7 +9,7 @@
 #include <sys/vfs.h>
 #include <unistd.h>
 
-namespace racer::revoq {
+namespace revoq {
 
 inline std::string resolveStreamBase(std::string_view app_name,
                                      std::string_view app_directory,
@@ -35,4 +35,4 @@ inline std::string resolveStreamBase(std::string_view app_name,
   return std::string(app_directory);
 }
 
-} // namespace racer::revoq
+} // namespace revoq

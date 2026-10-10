@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 RevoRacer
+// Tests that the appender's release-store on FrameHeader::length fully
+// synchronises with the cursor's acquire-load, so the cursor never observes
+// a partially-written frame (§6.1).
+//
+// Run under TSan to verify the memory-ordering is correct:
+//   cmake -DCMAKE_CXX_FLAGS="-fsanitize=thread -g" ...
+//   ./revoq_tests "Frame publish ordering"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -10,8 +17,8 @@
 #include <revoq/MergingCursor.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 namespace fs = std::filesystem;
 
 namespace {
@@ -53,6 +60,10 @@ public:
 
 TEST_CASE_METHOD(OrderingFixture, "Frame publish ordering", "[ordering]") {
   SECTION("cursor never observes a torn frame when length > 0") {
+    // appender: single thread, background_threads=false (no retire thread, so
+    // the only concurrent activity is appender-thread vs. cursor-thread on the
+    // shared mmap).
+    //
     // 10,000 frames with DEFAULT 2MB segments (32,766 frames/segment) → no
     // rotation, keeping the test focused on the acquire/release path in the hot
     // loop.
@@ -111,7 +122,7 @@ TEST_CASE_METHOD(OrderingFixture, "Frame publish ordering", "[ordering]") {
 
     for (uint64_t i = 0; i < N; ++i) {
       OrderMsg msg{i, ~i};
-      publish(appender, static_cast<int64_t>(i + 1), MsgType::Trade, msg);
+      publish(appender, static_cast<int64_t>(i + 1), kTagA, msg);
     }
 
     cursor_thread.join();

@@ -9,8 +9,8 @@
 #include <revoq/MergingCursor.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 
 namespace {
 
@@ -34,7 +34,7 @@ TEST_CASE("MergingCursor FrameView loop reads one stream",
     for (uint32_t i = 0; i < 5; ++i) {
       RangeTrade trade{1'000'000 + static_cast<int64_t>(i * 1000), i,
                        100.0 + i};
-      publish(*appender, trade.timestamp, MsgType::Trade, trade);
+      publish(*appender, trade.timestamp, kTagA, trade);
     }
   }
 
@@ -44,7 +44,7 @@ TEST_CASE("MergingCursor FrameView loop reads one stream",
   std::vector<uint32_t> ids;
   std::vector<uint64_t> sequences;
   while (auto frame = cursor.tryCurrentFrame()) {
-    REQUIRE(frame->getMsgType() == static_cast<int32_t>(MsgType::Trade));
+    REQUIRE(frame->getMsgType() == static_cast<int32_t>(kTagA));
     const auto &trade = frame->data<RangeTrade>();
     ids.push_back(trade.id);
     sequences.push_back(frame->getSequence());
@@ -66,15 +66,15 @@ TEST_CASE("MergingCursor FrameView loop preserves merged stream order",
         location, 0, AppenderOptions{.prefault = true});
     RangeTrade first{1'000'000, 10, 100.0};
     RangeTrade third{3'000'000, 30, 300.0};
-    publish(*appender, first.timestamp, MsgType::Trade, first);
-    publish(*appender, third.timestamp, MsgType::Trade, third);
+    publish(*appender, first.timestamp, kTagA, first);
+    publish(*appender, third.timestamp, kTagA, third);
   }
 
   {
     auto appender = std::make_shared<Appender<>>(
         location, 1, AppenderOptions{.prefault = true});
     RangeTrade second{2'000'000, 20, 200.0};
-    publish(*appender, second.timestamp, MsgType::Trade, second);
+    publish(*appender, second.timestamp, kTagA, second);
   }
 
   MergingCursor cursor(MergingCursorOptions{.prefault = true});

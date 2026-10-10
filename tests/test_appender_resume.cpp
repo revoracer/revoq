@@ -2,7 +2,13 @@
 // Copyright 2026 RevoRacer
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <memory>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include <revoq/Appender.h>
@@ -12,8 +18,8 @@
 #include <revoq/StreamBase.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 namespace fs = std::filesystem;
 
 // Test data structure
@@ -55,9 +61,9 @@ TEST_CASE("Appender basic write and read", "[stream][appender][basic]") {
     TestData data2{200, 234.56, "GOOGL"};
     TestData data3{300, 345.67, "MSFT"};
 
-    publish(*appender, 1000000, MsgType::Trade, data1);
-    publish(*appender, 2000000, MsgType::Trade, data2);
-    publish(*appender, 3000000, MsgType::Trade, data3);
+    publish(*appender, 1000000, kTagA, data1);
+    publish(*appender, 2000000, kTagA, data2);
+    publish(*appender, 3000000, kTagA, data3);
 
     REQUIRE(appender->getCurrentSequence() == 3);
     REQUIRE(appender->getCurrentSegmentId() == 1);
@@ -79,7 +85,8 @@ TEST_CASE("Appender resume after restart", "[stream][appender][resume]") {
     // Write 100 frames
     for (int i = 0; i < 100; ++i) {
       TestData data{i, static_cast<double>(i) * 1.5, "TEST"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     last_seq_before_restart = appender->getCurrentSequence();
@@ -112,7 +119,7 @@ TEST_CASE("Appender resume after restart", "[stream][appender][resume]") {
     // Write more data
     for (int i = 0; i < 50; ++i) {
       TestData data{i + 1000, static_cast<double>(i + 1000) * 1.5, "TST2"};
-      publish(*appender, (i + 1000) * 1000000, MsgType::Trade, data);
+      publish(*appender, (i + 1000) * 1000000, kTagA, data);
     }
 
     // Should have continued sequence numbering
@@ -134,7 +141,7 @@ TEST_CASE("Appender resume with multiple segments",
         location, dest_id, AppenderOptions{.prefault = false});
     for (int i = 0; i < FRAMES_PER_TEST; ++i) {
       TestData data{i, static_cast<double>(i), "SYMB"};
-      publish(*appender, i * 1'000'000, MsgType::Trade, data);
+      publish(*appender, i * 1'000'000, kTagA, data);
     }
 
     int64_t final_segment = appender->getCurrentSegmentId();
@@ -183,7 +190,7 @@ TEST_CASE("Appender resume from empty stream",
 
   // Write some data
   TestData data{42, 99.99, "TEST"};
-  publish(*appender, 1000000, MsgType::Trade, data);
+  publish(*appender, 1000000, kTagA, data);
 
   REQUIRE(appender->getCurrentSequence() == 1);
 }
@@ -205,7 +212,8 @@ TEST_CASE("Appender with AppenderWarmer resume",
     // Write data
     for (int i = 0; i < 1005; ++i) {
       TestData data{i, static_cast<double>(i), "WARM"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     uint32_t final_seq = appender->getCurrentSequence();
@@ -233,7 +241,7 @@ TEST_CASE("Appender with AppenderWarmer resume",
     // Write more data with warmer active
     for (int i = 0; i < 500; ++i) {
       TestData data{i + 2000, static_cast<double>(i + 2000), "WRM2"};
-      publish(*appender2, (i + 2000) * 1000000, MsgType::Trade, data);
+      publish(*appender2, (i + 2000) * 1000000, kTagA, data);
     }
 
     REQUIRE(appender2->getCurrentSequence() == final_seq + 500);
@@ -252,11 +260,14 @@ TEST_CASE("Appender resume vs no-resume behavior",
 
     for (int i = 0; i < 100; ++i) {
       TestData data{i, static_cast<double>(i), "INIT"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     appender.reset();
-    
+    //  }
+    //
+    //  SECTION("With resume=true, should continue") {
     appender = std::make_shared<Appender<>>(location, dest_id,
                                             AppenderOptions{.prefault = false});
 
@@ -265,11 +276,13 @@ TEST_CASE("Appender resume vs no-resume behavior",
     REQUIRE(seq_before >= 100);
 
     TestData data{999, 999.99, "CONT"};
-    publish(*appender, 999000000, MsgType::Trade, data);
+    publish(*appender, 999000000, kTagA, data);
 
     REQUIRE(appender->getCurrentSequence() == seq_before + 1);
   }
 
+  // The appender always resumes from existing segments now. A restart-from-zero
+  // mode would need an explicit destructive/truncate API.
 }
 
 TEST_CASE("Appender sequence number continuity",
@@ -288,7 +301,8 @@ TEST_CASE("Appender sequence number continuity",
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i, static_cast<double>(i), "CYC1"};
-        publish(*appender, i * 1000000, MsgType::Trade, data);
+        publish(*appender, static_cast<std::int64_t>(i) * 1000000,
+                kTagA, data);
         all_sequences.push_back(appender->getCurrentSequence() - 1);
       }
     }
@@ -300,7 +314,7 @@ TEST_CASE("Appender sequence number continuity",
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i + 100, static_cast<double>(i + 100), "CYC2"};
-        publish(*appender, (i + 100) * 1000000, MsgType::Trade, data);
+        publish(*appender, (i + 100) * 1000000, kTagA, data);
         all_sequences.push_back(appender->getCurrentSequence() - 1);
       }
     }
@@ -312,7 +326,7 @@ TEST_CASE("Appender sequence number continuity",
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i + 200, static_cast<double>(i + 200), "CYC3"};
-        publish(*appender, (i + 200) * 1000000, MsgType::Trade, data);
+        publish(*appender, (i + 200) * 1000000, kTagA, data);
         all_sequences.push_back(appender->getCurrentSequence() - 1);
       }
     }
@@ -342,7 +356,7 @@ TEST_CASE("Appender marker frames with resume",
 
       for (int i = 0; i < 10; ++i) {
         TestData data{i, static_cast<double>(i), "MRK1"};
-        publish(*appender, (i + 1) * 1000000, MsgType::Trade, data);
+        publish(*appender, (i + 1) * 1000000, kTagA, data);
       }
 
       appender->mark(20000000, MsgType::SessionEnd);
@@ -360,7 +374,7 @@ TEST_CASE("Appender marker frames with resume",
       appender->mark(30000000, MsgType::SessionStart);
 
       TestData data{999, 999.99, "MRK2"};
-      publish(*appender, 31000000, MsgType::Trade, data);
+      publish(*appender, 31000000, kTagA, data);
 
       REQUIRE(appender->getCurrentSequence() == 14);
     }
@@ -397,7 +411,7 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
           location, dest_id,
           AppenderOptions{.prefault = false, .background_threads = false});
       TestData data{1, 1.0, "MISS"};
-      publish(*appender, 1'000'000, MsgType::Trade, data);
+      publish(*appender, 1'000'000, kTagA, data);
       appender->mark(2'000'000, MsgType::SegmentEnd);
     }
 
@@ -425,7 +439,7 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
           location, dest_id,
           AppenderOptions{.prefault = false, .background_threads = false});
       TestData data{1, 1.0, "EMTY"};
-      publish(*appender, 1'000'000, MsgType::Trade, data);
+      publish(*appender, 1'000'000, kTagA, data);
       appender->mark(2'000'000, MsgType::SegmentEnd);
     }
     Segment::load(location, dest_id, 2, true, false);
@@ -456,7 +470,7 @@ TEST_CASE("MergingCursor segment rotation does not scan directory",
         location, dest_id,
         AppenderOptions{.prefault = false, .background_threads = false});
     TestData data{1, 1.0, "FAST"};
-    publish(*appender, 1'000'000, MsgType::Trade, data);
+    publish(*appender, 1'000'000, kTagA, data);
     appender->mark(2'000'000, MsgType::SegmentEnd);
   }
   Segment::load(location, dest_id, 2, true, false);
@@ -490,7 +504,7 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
         AppenderOptions{.prefault = false, .background_threads = false});
     appender->mark(1'000'000, MsgType::SessionStart);
     TestData first{1, 1.0, "R1"};
-    publish(*appender, 2'000'000, MsgType::Trade, first);
+    publish(*appender, 2'000'000, kTagA, first);
     appender->mark(3'000'000, MsgType::SessionEnd);
     REQUIRE(appender->getCurrentSequence() == 3);
   }
@@ -503,7 +517,7 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
     REQUIRE(appender->getCurrentSegmentId() == 1);
     appender->mark(4'000'000, MsgType::SessionStart);
     TestData second{2, 2.0, "R2"};
-    publish(*appender, 5'000'000, MsgType::Trade, second);
+    publish(*appender, 5'000'000, kTagA, second);
     appender->mark(6'000'000, MsgType::SessionEnd);
     REQUIRE(appender->getCurrentSequence() == 6);
   }
@@ -525,7 +539,7 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
     case MsgType::SessionStart:
       ++starts;
       break;
-    case MsgType::Trade:
+    case kTagA:
       ++trades;
       break;
     case MsgType::SessionEnd:
@@ -558,7 +572,7 @@ TEST_CASE("Appender resumes after SegmentEnd on next segment",
         location, dest_id,
         AppenderOptions{.prefault = false, .background_threads = false});
     TestData data{1, 1.0, "PEND"};
-    publish(*appender, 1'000'000, MsgType::Trade, data);
+    publish(*appender, 1'000'000, kTagA, data);
     appender->mark(2'000'000, MsgType::SegmentEnd);
     REQUIRE(appender->getCurrentSequence() == 2);
     REQUIRE(appender->getCurrentSegmentId() == 1);
@@ -584,9 +598,13 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
 
       for (int i = 0; i < 100; ++i) {
         TestData data{i, static_cast<double>(i), "EDGE"};
-        publish(*appender, i * 1000000, MsgType::Trade, data);
+        publish(*appender, static_cast<std::int64_t>(i) * 1000000,
+                kTagA, data);
       }
     }
+
+    // TODO: Corrupt last segment file here if we want to test recovery
+
     // Try to resume - should handle gracefully
     REQUIRE_NOTHROW(std::make_shared<Appender<>>(
         location, dest_id, AppenderOptions{.prefault = false}));
@@ -605,14 +623,14 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
           AppenderOptions{.prefault = false, .background_threads = false});
       for (int i = 0; i < N; ++i) {
         TestData data{i, static_cast<double>(i), "CRSH"};
-        publish(*appender, i * 1'000'000, MsgType::Trade, data);
+        publish(*appender, i * 1'000'000, kTagA, data);
       }
       REQUIRE(static_cast<int>(appender->getCurrentSequence()) == N);
 
       // Open a frame but do NOT close it — simulates crash mid-publish.
       // openData() calls nextSeq() so sequence N is consumed but length stays
       // 0.
-      auto &slot = appender->openData<TestData>(N * 1'000'000, MsgType::Trade);
+      auto &slot = appender->openData<TestData>(N * 1'000'000, kTagA);
       (void)slot;
       // appender goes out of scope here without closeData() — crash simulated.
     }
@@ -628,7 +646,7 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
 
     // Write one frame to confirm the resumed appender is functional.
     TestData cont{999, 9.9, "RES"};
-    publish(*appender2, (N + 1) * 1'000'000, MsgType::Trade, cont);
+    publish(*appender2, (N + 1) * 1'000'000, kTagA, cont);
     REQUIRE(static_cast<int>(appender2->getCurrentSequence()) == N + 1);
 
     // cursor joined at segment 1 sees N committed frames and the continued
@@ -652,7 +670,8 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
     // Simulate very large sequence by writing many frames
     for (int i = 0; i < 1000; ++i) {
       TestData data{i, static_cast<double>(i), "BIG"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     uint32_t large_seq = appender->getCurrentSequence();
@@ -681,7 +700,8 @@ TEST_CASE("Appender concurrent safety", "[stream][appender][concurrent]") {
 
     for (int i = 0; i < NUM_WRITES; ++i) {
       TestData data{i, static_cast<double>(i), "CONC"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     REQUIRE(appender->getCurrentSequence() == NUM_WRITES);
@@ -702,7 +722,8 @@ TEST_CASE("Appender performance baseline", "[stream][appender][performance]") {
 
     for (int i = 0; i < NUM_WRITES; ++i) {
       TestData data{i, static_cast<double>(i) * 1.5, "PERF"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     auto end = std::chrono::high_resolution_clock::now();
@@ -732,7 +753,8 @@ TEST_CASE("Appender performance baseline", "[stream][appender][performance]") {
 
     for (int i = 0; i < NUM_WRITES; ++i) {
       TestData data{i, static_cast<double>(i) * 1.5, "PWRM"};
-      publish(*appender, i * 1000000, MsgType::Trade, data);
+      publish(*appender, static_cast<std::int64_t>(i) * 1000000, kTagA,
+              data);
     }
 
     auto end = std::chrono::high_resolution_clock::now();

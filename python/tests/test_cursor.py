@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 RevoRacer
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
 """MergingCursor Python binding tests."""
 import struct
 import revoq
@@ -8,6 +8,27 @@ import revoq
 def test_cursor_constructs():
     r = revoq.MergingCursor()
     assert r.current_frame() is None
+
+
+def test_cursor_exposes_warmer_and_cpu_options(tmp_journal):
+    _, location, dest_id = tmp_journal
+    w = revoq.Appender(location, dest_id, background_threads=False)
+    w.write(msg_type=100, gen_time=1, data=b"cursor")
+    del w
+
+    r = revoq.MergingCursor(
+        prefault=False,
+        background_threads=True,
+        retained_segment_limit=1,
+        warmer_timeout_ms=1,
+        warmer_cpu=-1,
+        retire_cpu=-1,
+    )
+    r.join(location, dest_id, 0)
+    frame = r.read(timeout_ms=0)
+    assert frame is not None
+    assert frame.msg_type == 100
+    assert bytes(frame.data) == b"cursor"
 
 
 def test_cursor_empty_returns_none_immediately(tmp_journal):

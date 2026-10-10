@@ -14,12 +14,21 @@
 #include <revoq/TypedDispatcher.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
 
 namespace {
 
+// TypedDispatcher::on<T>() pins its tag to revoq::MsgType specifically (see
+// `on<T::kMsgType, T>` in TypedDispatcher.h), so T::kMsgType must be a real
+// MsgType value. revoq::MsgType itself only names the transport markers
+// (SegmentEnd, SessionStart/End) — payload tags like Trade belong to
+// whichever registry owns the payload (revomd::MsgType for real market
+// data). This example doesn't use real market-data types, so — like
+// tests/test_helpers.h's kTagA/kTagE/kTagF — it borrows unnamed values from
+// MsgType's otherwise-reserved 100-9999 market-data block as opaque tags
+// rather than inventing nonexistent named members.
 struct Trade {
-  static constexpr MsgType kMsgType = MsgType::Trade;
+  static constexpr MsgType kMsgType = static_cast<MsgType>(100);
 
   std::int64_t timestamp;
   std::uint32_t symbol_id;
@@ -27,7 +36,7 @@ struct Trade {
 };
 
 struct Bbo {
-  static constexpr MsgType kMsgType = MsgType::BBO;
+  static constexpr MsgType kMsgType = static_cast<MsgType>(106);
 
   std::int64_t timestamp;
   std::uint32_t bid_size;
@@ -35,7 +44,7 @@ struct Bbo {
 };
 
 struct BookReset {
-  static constexpr MsgType kMsgType = MsgType::BookReset;
+  static constexpr MsgType kMsgType = static_cast<MsgType>(108);
 };
 
 class TempDir {

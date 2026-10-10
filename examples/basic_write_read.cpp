@@ -13,9 +13,18 @@
 #include <revoq/Appender.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
 
 namespace {
+
+// revoq::MsgType only carries the transport markers (SegmentEnd,
+// SessionStart/End); payload tags like Trade belong to the registry that
+// owns the payload (revomd::MsgType for real market data). This example
+// doesn't use real market-data types, so it claims its own tag enum instead
+// of inventing nonexistent revoq::MsgType members.
+enum class ExampleMsgType : std::uint16_t {
+  Trade = 100,
+};
 
 struct Trade {
   std::int64_t timestamp;
@@ -45,8 +54,8 @@ private:
   fs::path path_;
 };
 
-template <typename T>
-void publish(Appender<> &appender, std::int64_t timestamp, MsgType msg_type,
+template <typename T, FrameTag Tag>
+void publish(Appender<> &appender, std::int64_t timestamp, Tag msg_type,
              const T &message) {
   auto &slot = appender.openData<T>(timestamp, msg_type);
   slot = message;
@@ -69,9 +78,9 @@ int main() {
       Appender<> appender(
           location, dest_id,
           AppenderOptions{.prefault = false, .background_threads = false});
-      publish(appender, 1, MsgType::Trade, Trade{1, 101, 100.25, 10});
-      publish(appender, 2, MsgType::Trade, Trade{2, 101, 100.50, 20});
-      publish(appender, 3, MsgType::Trade, Trade{3, 101, 100.75, 30});
+      publish(appender, 1, ExampleMsgType::Trade, Trade{1, 101, 100.25, 10});
+      publish(appender, 2, ExampleMsgType::Trade, Trade{2, 101, 100.50, 20});
+      publish(appender, 3, ExampleMsgType::Trade, Trade{3, 101, 100.75, 30});
     }
 
     MergingCursor cursor(
@@ -81,7 +90,8 @@ int main() {
     int count = 0;
     double last_price = 0.0;
     while (const auto current = cursor.tryCurrentFrame()) {
-      if (static_cast<MsgType>(current.msg_type) == MsgType::Trade) {
+      if (static_cast<ExampleMsgType>(current.msg_type) ==
+          ExampleMsgType::Trade) {
         const auto &trade = current->data<Trade>();
         ++count;
         last_price = trade.price;

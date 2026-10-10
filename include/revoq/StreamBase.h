@@ -6,6 +6,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -18,7 +19,7 @@
 #include <revobase/HashUtils.h>
 #include <revobase/StringUtils.hpp>
 
-namespace racer::revoq {
+namespace revoq {
 enum class Mode : std::int8_t { UNKNOWN = 0, LIVE, REPLAY };
 
 static const std::unordered_map<std::string, Mode> str2mode{
@@ -42,6 +43,7 @@ static const std::unordered_map<std::string, Category> str2category{
 
 enum class Layout : std::int8_t { UNKNOWN = 0, STREAM, LOG };
 
+// Instead of runtime maps, use constexpr functions
 constexpr const char *categoryToStr(Category c) noexcept {
   switch (c) {
   case Category::MARKETDATA:
@@ -79,58 +81,93 @@ constexpr const char *layoutToStr(Layout l) noexcept {
   }
 }
 
+// Any 16-bit scoped enum is accepted as a frame tag.
+//
+// revoq stores msg_type and hands it back without interpreting it, so the
+// write API is not typed to any one registry: pass revomd::MsgType for market
+// data, revoq::MsgType for the session/segment markers revoq itself
+// acts on, or your own enum. The constraint is what keeps a bare int or a
+// wrong-width enum from silently becoming a tag.
+template <class E>
+concept FrameTag =
+    std::is_enum_v<E> &&
+    sizeof(std::underlying_type_t<E>) == sizeof(std::uint16_t);
+
+// Frame type tag, persisted as uint16_t in FrameHeader.
+//
+// revoq is payload-agnostic: it moves opaque frames and never interprets a
+// payload. What it declares here is only the values IT acts on — the segment
+// marker its own appender/cursor logic reads. Payload registries belong to the
+// schema that owns the payload; the market-data registry is revomd::MsgType
+// (revomd/wire.h). A journal writer casts whichever registry it is emitting
+// from into the uint16 field.
+//
+// NUMERIC ALLOCATION — THIS TABLE IS AN APPEND-ONLY LEDGER.
+//
+// Values are persisted in every capture on disk, so an allocated number can
+// never be reused for a different meaning and a block can never be narrowed.
+// Widen and append only. Two people independently allocating the same value
+// six months apart is the failure this table exists to prevent, so claim a
+// block here BEFORE writing the enum that fills it.
+//
+//     0            Invalid — also what a zero-filled frame decodes as
+//     1-99         permanently unallocated (see below)
+//     100-9999     normalized market data ......... revomd::MsgType
+//     10000-10199  stream/system markers .......... this enum
+//     10200-19999  execution / OMS ................ RESERVED, unallocated
+//     20000-39999  strategy / risk / telemetry .... RESERVED, unallocated
+//     40000-65535  reserved / private / experimental
+//
+// 1-99 is deliberately never allocated. A truncated or garbage frame carrying
+// a small integer should fail to decode rather than land on a real type — the
+// same reasoning that keeps 0 reserved-invalid in revomd::Side.
+//
+// Block sizes are deliberately lopsided. Market data grows slowly: each value
+// is a normalized payload layout somebody must write, journal, decode and
+// support forever, and 28 of them cover four venues across L1/L2/L3, feed
+// health, reference data and raw preservation. Per-venue variants consume NO
+// values here — they ride MsgType::NativeEvent with venue + native_template_id
+// inside NativeEventHeader, which is why venue count does not enter this
+// budget. Strategy/telemetry gets the largest block because it grows fastest:
+// those records are cheap to add, and there is one family per strategy.
+//
+// Execution previously sat at 1000-1199 holding OrderUpdate / PositionUpdate /
+// AccountBalance / ExecutionReport / TradingSignal / StrategyState /
+// MarketDataRequest. Nothing ever referenced or wrote them, so that block was
+// never persisted and was free to move; it was widened to 10200-19999 and
+// split from strategy/telemetry, which has a different growth profile.
+//
+// The 10000-10199 block sits mid-space rather than at the top because its
+// values are frozen — see below. Routing a merged stream is a range test
+// either way, and system frames are rare on any hot path.
 enum class MsgType : std::uint16_t {
   Invalid = 0,
 
-  Trade = 100,
-  SnapshotDepth = 101,
-  DiffDepth = 102,
-  BookTop5 = 103,
-  BookTop10 = 104,
-  BookTop20 = 105,
-  BBO = 106,
-  BookReset = 108,
-
-  FeedStatus = 110,
-  FeedGap = 111,
-  FeedRecovery = 112,
-  Heartbeat = 113,
-
-  MarkPrice = 150,
-  FundingRate = 151,
-  OpenInterest = 152,
-  Liquidation = 153,
-
-  MboAdd = 200,
-  MboModify = 201,
-  MboDelete = 202,
-  MboExecute = 203,
-  MboSnapshot = 204,
-
-  InstrumentDefinition = 300,
-  SourceDefinition = 301,
-  TradingStatus = 302,
-  TickTable = 303,
-
-  RawPacket = 400,
-  RawMessage = 401,
-  NativeEvent = 402,
-
-  OrderUpdate = 1000,
-  PositionUpdate = 1001,
-  AccountBalance = 1002,
-  ExecutionReport = 1003,
-
-  TradingSignal = 1100,
-  StrategyState = 1101,
-  MarketDataRequest = 1102,
-
+  // Stream/system markers: 10000-10199.
+  //
+  // FROZEN. These three are the most heavily persisted values in the scheme
+  // and cannot move.
+  //
+  // SegmentEnd is genuine transport: rotateSegment() writes it itself on every
+  // rotation without any caller asking, and revoq acts on it internally (EOF
+  // in Stream.h, resume-after-rotation in Appender.h, sentinel filtering in
+  // MergingCursor.h). It is in every segment ever written.
+  //
+  // SessionStart/SessionEnd are different in kind — an APPLICATION convention
+  // that happens to live in revoq's enum. revoq never interprets them; they go
+  // through the generic mark() API, are written by the capture apps, and are
+  // read only by tools (peek treats a missing SessionEnd as a truncated
+  // capture). They stay here because they are already on disk, not because
+  // transport owns them.
   SegmentEnd = 10000,
   SessionStart = 10001,
   SessionEnd = 10002,
 
-  SimulationStart = 10100,
-  SimulationEnd = 10101
+  // 10100-10199 previously held SimulationStart / SimulationEnd. Nothing ever
+  // wrote or read them, and simulation boundaries are the backtest harness's
+  // vocabulary rather than the journal transport's — the same argument that
+  // keeps the market-data registry out of this enum. Removed while still free;
+  // the range stays open for the replay harness to claim.
 };
 
 class Location;
@@ -185,7 +222,7 @@ public:
 private:
   static std::string makeUname(const char *cat_str, const std::string &g,
                                const std::string &n, const char *mod_str) {
-
+    // Reserve exact size to avoid reallocations
     size_t cat_len = std::strlen(cat_str);
     size_t mod_len = std::strlen(mod_str);
     std::string result;
@@ -231,7 +268,7 @@ public:
                                                     Layout l) const override {
     auto p = layoutDir(location, l);
     if (!std::filesystem::exists(p)) {
-
+      // like mkdir -p and exists_ok = true
       std::filesystem::create_directories(p);
     }
     return p;
@@ -242,9 +279,7 @@ public:
                  const std::string &name) const override {
     auto p = makeLayoutDir(location, l);
     auto p2 = p / fmt::format("{}.{}", name, layoutToStr(l));
-    if (!std::filesystem::exists(p2)) {
-      revobase::FileUtils::touch(p2);
-    }
+    revobase::FileUtils::touch(p2); // creates if missing, never truncates
     return p2;
   }
 
@@ -254,8 +289,7 @@ public:
     auto p = makeLayoutDir(location, Layout::STREAM);
     std::vector<int> segment_ids;
     for (const auto &entry : std::filesystem::directory_iterator(p)) {
-      auto parts =
-          revobase::StringUtils::split(entry.path().filename().string(), '.');
+      auto parts = revobase::StringUtils::split(entry.path().filename().string(), '.');
       if (parts[0] == hex_dest_id) {
         segment_ids.push_back(std::stoi(parts[1]));
       }
@@ -273,4 +307,4 @@ private:
   std::filesystem::path home_path_;
 };
 
-} // namespace racer::revoq
+} // namespace revoq

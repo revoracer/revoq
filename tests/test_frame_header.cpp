@@ -12,7 +12,12 @@
 #include <revoq/Frame.h>
 #include <revoq/StreamBase.h>
 
-using namespace racer::revoq;
+// Opaque payload tag — revoq stores msg_type without interpreting it, so a
+// journal test uses an arbitrary value rather than a market-data enum.
+static constexpr revoq::MsgType kTagA =
+    static_cast<revoq::MsgType>(100);
+
+using namespace revoq;
 
 namespace {
 
@@ -165,14 +170,14 @@ TEST_CASE("FrameHeader length publish orders all metadata",
     }
 
     cursor_saw_frame.store(true, std::memory_order_relaxed);
-    CHECK(header.msg_type == static_cast<std::uint16_t>(MsgType::Trade));
+    CHECK(header.msg_type == static_cast<std::uint16_t>(kTagA));
     CHECK(header.flags == FRAME_HIGH_PRIORITY);
     CHECK(getSequence(header) == 42);
     CHECK(header.gen_time == 1'000'200);
     CHECK(getEventTimeOrSentinel(header) == 1'000'000);
   });
 
-  header.msg_type = static_cast<std::uint16_t>(MsgType::Trade);
+  header.msg_type = static_cast<std::uint16_t>(kTagA);
   header.flags = FRAME_HIGH_PRIORITY;
   setSequence(header, 42);
   header.gen_time = 1'000'200;

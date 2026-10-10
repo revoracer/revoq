@@ -19,9 +19,18 @@
 #include <revoq/Appender.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
 
 namespace {
+
+// revoq::MsgType only carries the transport markers (SegmentEnd,
+// SessionStart/End); payload tags like Trade belong to the registry that
+// owns the payload (revomd::MsgType for real market data). This example
+// doesn't use real market-data types, so it claims its own tag enum instead
+// of inventing nonexistent revoq::MsgType members.
+enum class ExampleMsgType : std::uint16_t {
+  Trade = 100,
+};
 
 struct Trade {
   std::int64_t timestamp;
@@ -51,8 +60,8 @@ private:
   fs::path path_;
 };
 
-template <typename T>
-void publish(Appender<> &appender, std::int64_t timestamp, MsgType msg_type,
+template <typename T, FrameTag Tag>
+void publish(Appender<> &appender, std::int64_t timestamp, Tag msg_type,
              const T &message) {
   auto &slot = appender.openData<T>(timestamp, msg_type);
   slot = message;
@@ -147,7 +156,8 @@ int main(int argc, char **argv) {
           _exit(12);
         prev_sequence = sequence;
 
-        if (static_cast<MsgType>(current.msg_type) == MsgType::Trade)
+        if (static_cast<ExampleMsgType>(current.msg_type) ==
+            ExampleMsgType::Trade)
           ++count;
 
         cursor.advance(current);
@@ -163,7 +173,7 @@ int main(int argc, char **argv) {
 
     for (int i = 0; i < messages; ++i) {
       const auto ts = static_cast<std::int64_t>(i + 1);
-      publish(appender, ts, MsgType::Trade,
+      publish(appender, ts, ExampleMsgType::Trade,
               Trade{ts, 101, 100.0 + static_cast<double>(i), 10});
     }
 

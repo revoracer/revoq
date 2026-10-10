@@ -17,10 +17,10 @@
 #include <revoq/StreamBase.h>
 #include <revobase/TimeUtils.h>
 
-using namespace racer::revoq;
+using namespace revoq;
 namespace fs = std::filesystem;
 
-namespace racer::revoq::test {
+namespace revoq::test {
 // Helper to create a temporary test directory
 class TempTestDir {
 public:
@@ -56,8 +56,24 @@ inline LocationPtr createTestLocation(const std::string &path) {
   return loc;
 }
 
-template <typename Appender, typename T>
-void publish(Appender &appender, int64_t timestamp, MsgType msg_type,
+// Opaque payload tags for revoq's own tests.
+//
+// revoq never interprets a payload — msg_type is a 16-bit value it stores and
+// hands back. These tests only need frames they can tell apart, so they use
+// arbitrary tags rather than the market-data registry (revomd::MsgType): a
+// journal test that reached for a market-data enum would be asserting exactly
+// the coupling the transport is supposed to not have. The numeric values match
+// what these tests used previously, so on-disk fixtures stay byte-identical.
+inline constexpr MsgType kTagA = static_cast<MsgType>(100);
+inline constexpr MsgType kTagD = static_cast<MsgType>(105);
+inline constexpr MsgType kTagE = static_cast<MsgType>(106);
+inline constexpr MsgType kTagF = static_cast<MsgType>(108);
+
+// msg_type is a FrameTag, not revoq's own MsgType: helpers are shared with
+// tests that journal market-data frames (revomd::MsgType), and revoq accepts
+// any 16-bit registry.
+template <typename Appender, typename T, FrameTag Tag>
+void publish(Appender &appender, int64_t timestamp, Tag msg_type,
              const T &data, uint16_t flags = FRAME_NORMAL) {
   static_assert(std::is_trivially_copyable_v<T>,
                 "stream test messages must be trivially copyable");
@@ -82,7 +98,7 @@ inline void writeFillerSegment(const LocationPtr &location, uint32_t dest_id,
   const int64_t base = revobase::Timestamp::now().nsec();
   for (int i = 0; i < count; ++i) {
     const FillerMessage m{base + i, static_cast<uint32_t>(i)};
-    publish(*appender, m.ts, MsgType::Trade, m);
+    publish(*appender, m.ts, kTagA, m);
   }
 }
-} // namespace racer::revoq::test
+} // namespace revoq::test

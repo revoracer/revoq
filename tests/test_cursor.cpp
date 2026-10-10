@@ -10,8 +10,8 @@
 #include <revobase/TimeUtils.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 namespace fs = std::filesystem;
 
 // Test data
@@ -62,7 +62,7 @@ public:
     for (int i = 0; i < num_messages; ++i) {
       TestMessage msg{start_time + i * 1000, static_cast<uint32_t>(i),
                       100.0 + i};
-      publish(*appender, msg.timestamp, MsgType::Trade, msg);
+      publish(*appender, msg.timestamp, kTagA, msg);
     }
   }
 
@@ -224,7 +224,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
         location, 0, AppenderOptions{.prefault = true});
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + i * 3000, static_cast<uint32_t>(i), 0.0};
-      publish(*appender, msg.timestamp, MsgType::Trade, msg);
+      publish(*appender, msg.timestamp, kTagA, msg);
     }
   }
 
@@ -235,7 +235,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + 1000 + i * 3000, static_cast<uint32_t>(i),
                       1.0};
-      publish(*appender, msg.timestamp, MsgType::Trade, msg);
+      publish(*appender, msg.timestamp, kTagA, msg);
     }
   }
 
@@ -246,7 +246,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + 2000 + i * 3000, static_cast<uint32_t>(i),
                       2.0};
-      publish(*appender, msg.timestamp, MsgType::Trade, msg);
+      publish(*appender, msg.timestamp, kTagA, msg);
     }
   }
 
@@ -318,7 +318,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor seek", "[cursor][seek]") {
     for (int i = 0; i < 100; ++i) {
       TestMessage msg{base_time + i * 1000, static_cast<uint32_t>(i),
                       100.0 + i};
-      publish(*appender, msg.timestamp, MsgType::Trade, msg);
+      publish(*appender, msg.timestamp, kTagA, msg);
     }
   }
 

@@ -9,8 +9,8 @@
 #include <revoq/MergingCursor.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 
 namespace {
 
@@ -37,7 +37,7 @@ TEST_CASE("Cross-process cursor visibility", "[multiprocess]") {
     auto location = Location::make(Mode::LIVE, Category::EXECUTION, "test",
                                    "mp_cursor", locator);
 
-    
+    // DEFAULT 2 MB segments (EXECUTION + dest_id=0 → SEGMENT_SIZE_DEFAULT).
     // TradeMsg frames stride 64 B physical.
     // Frames per segment = (2 MB - 128 B) / 64 B = 32,766.
     // 70,000 messages → 2 segment rotations, exercising the cross-process
@@ -119,7 +119,7 @@ TEST_CASE("Cross-process cursor visibility", "[multiprocess]") {
     for (uint64_t i = 0; i < N; ++i) {
       TradeMsg msg{static_cast<int64_t>(i), static_cast<uint32_t>(i), 100.0,
                    1000, 'B'};
-      publish(appender, msg.timestamp, MsgType::Trade, msg);
+      publish(appender, msg.timestamp, kTagA, msg);
     }
 
     int status = 0;

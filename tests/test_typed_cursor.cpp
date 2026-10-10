@@ -13,13 +13,13 @@
 #include <revoq/TypedDispatcher.h>
 #include "test_helpers.h"
 
-using namespace racer::revoq;
-using namespace racer::revoq::test;
+using namespace revoq;
+using namespace revoq::test;
 
 namespace {
 
 struct TypedTrade {
-  static constexpr MsgType kMsgType = MsgType::Trade;
+  static constexpr MsgType kMsgType = kTagA;
 
   int64_t timestamp;
   uint32_t id;
@@ -27,7 +27,7 @@ struct TypedTrade {
 };
 
 struct TypedBBO {
-  static constexpr MsgType kMsgType = MsgType::BBO;
+  static constexpr MsgType kMsgType = kTagE;
 
   int64_t timestamp;
   uint32_t bid_size;
@@ -35,7 +35,7 @@ struct TypedBBO {
 };
 
 struct TypedBookReset {
-  static constexpr MsgType kMsgType = MsgType::BookReset;
+  static constexpr MsgType kMsgType = kTagF;
 };
 
 struct TinyTrade {
@@ -141,7 +141,7 @@ TEST_CASE("MergingCursor typed dispatch rejects mismatched payload sizes",
     auto appender = std::make_shared<Appender<>>(
         location, dest_id, AppenderOptions{.prefault = true});
     TinyTrade tiny{1'000'000, 7};
-    publish(*appender, tiny.timestamp, MsgType::Trade, tiny);
+    publish(*appender, tiny.timestamp, kTagA, tiny);
   }
 
   MergingCursor cursor(MergingCursorOptions{.prefault = true});
@@ -219,11 +219,11 @@ TEST_CASE("MergingCursor static fast path invokes concrete dispatcher",
   int bbo_count = 0;
   auto dispatcher = [&](MergingCursor::FrameView current) {
     switch (static_cast<MsgType>(current.msg_type)) {
-    case MsgType::Trade:
+    case kTagA:
       ++trade_count;
       CHECK(current->data<TypedTrade>().id == 23);
       break;
-    case MsgType::BBO:
+    case kTagE:
       ++bbo_count;
       CHECK(current->data<TypedBBO>().ask_size == 29);
       break;

@@ -14,7 +14,7 @@
 
 #include "MergingCursor.h"
 
-namespace racer::revoq {
+namespace revoq {
 
 template <typename...>
 inline constexpr bool typed_dispatch_always_false_v = false;
@@ -138,4 +138,4 @@ private:
   UnknownFrameHandler unknown_handler_;
 };
 
-} // namespace racer::revoq
+} // namespace revoq

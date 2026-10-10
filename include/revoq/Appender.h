@@ -21,11 +21,17 @@
 #include "detail/StreamPlatform.h"
 
 #include <revobase/TimeUtils.h>
-#include <revobase/portable_intrinsics.h>
+#include <revobase/PortableIntrinsics.h>
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+#include "detail/StreamDiagnostics.h"
+#endif
+
 #include <spdlog/spdlog.h>
 
-namespace racer::revoq {
 
+namespace revoq {
+
+// appender concurrency policies
 struct SingleAppenderPolicy {
   static constexpr bool serialize = false;
 };
@@ -40,12 +46,15 @@ struct AppenderOptions {
   bool prefault = true;
   size_t warmup_segments = 0;
   int warmer_cpu_core = -1;
-
+  // Retire timed-polls, so it belongs on a housekeeping core (-1 => the
+  // housekeeping fallback in pinThreadToBackgroundCpus). Distinct from the
+  // busy-poll warmer's dedicated core (warmer_cpu_core).
   int retire_cpu = -1;
   bool background_threads = true;
   size_t retained_segment_limit = DEFAULT_STREAM_APPENDER_RETAINED_SEGMENTS;
 };
 
+// RAII spinlock guard — compiles to nothing for SPSC
 template <bool Serialize> struct WriteLockGuard;
 
 template <> struct WriteLockGuard<false> {
@@ -76,7 +85,7 @@ public:
         max_retained_segments_(options.retained_segment_limit),
         segment_size_(findSegmentSize(location_, dest_id_)), writing_(false),
         current_sequence_(0), current_segment_id_(0) {
-
+    // 0 means no written segment found
     const auto last_segment_id = findLastWrittenSegment();
     if (last_segment_id > 0) {
       resumeFromSegment(last_segment_id);
@@ -100,12 +109,13 @@ public:
       SPDLOG_DEBUG("Appender created with AppenderWarmer ({} segments ahead)",
                    options.warmup_segments);
     }
-
+    // Start background retire thread
     if (background_threads_) {
       retire_running_.store(true, std::memory_order_relaxed);
       retire_thread_ = std::thread(&Appender::retireLoop, this);
 #ifdef __linux__
-
+      // Retire timed-polls on a housekeeping core (must NOT busy-spin). -1 uses
+      // the housekeeping fallback.
       detail::pinThreadToBackgroundCpus(retire_thread_.native_handle(),
                                         options.retire_cpu,
                                         "appender retire thread");
@@ -113,8 +123,11 @@ public:
     }
   }
 
-  template <typename T>
-  T &openData(int64_t timestamp, MsgType msg_type,
+  // openData/closeData form a split lock: acquire in open, release in close.
+  // RAII can't span function calls, so serialize path uses if constexpr
+  // manually.
+  template <typename T, FrameTag Tag>
+  T &openData(int64_t timestamp, Tag msg_type,
               uint16_t flags = FRAME_NORMAL) {
     if constexpr (AppenderPolicy::serialize) {
       int backoff = 1;
@@ -135,6 +148,9 @@ public:
     closeData<T>([](FrameHeader &) noexcept {});
   }
 
+  // Advanced metadata finalization hook. The callback runs immediately before
+  // the release-store that publishes length, while the frame is still private
+  // to the appender. The default closeData<T>() compiles this hook away.
   template <typename T, typename BeforePublish>
   void closeData(BeforePublish &&before_publish) {
     if (!open_frame_header_) [[unlikely]] {
@@ -174,11 +190,11 @@ public:
     retire_cv_.notify_all();
     if (retire_thread_.joinable())
       retire_thread_.join();
-    retired_segments_.clear();
+    retired_segments_.clear(); // inline cleanup when no retire thread
     SPDLOG_DEBUG("Appender teardown complete");
   }
 
-  void mark(int64_t timestamp, MsgType msg_type) {
+  template <FrameTag Tag> void mark(int64_t timestamp, Tag msg_type) {
     WriteLockGuard<AppenderPolicy::serialize> lock(writing_);
     if (!current_segment_) {
       rotateSegment();
@@ -187,7 +203,10 @@ public:
     closeFrame(frame_hdr, 0);
   }
 
-  void writeBytes(int64_t timestamp, MsgType msg_type, const void *data,
+  // Variable-size raw write for language bindings (Python, C API).
+  // One memcpy from the caller's buffer into the mmap slot; no hot-path impact.
+  template <FrameTag Tag>
+  void writeBytes(int64_t timestamp, Tag msg_type, const void *data,
                   std::size_t size) {
     WriteLockGuard<AppenderPolicy::serialize> lock(writing_);
     if (!current_segment_)
@@ -204,6 +223,33 @@ public:
   [[nodiscard]] int64_t getCurrentSegmentId() const {
     return current_segment_id_.load(std::memory_order_acquire);
   }
+
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+  [[nodiscard]] AppenderStats getStats() const {
+    AppenderStats s;
+    s.rotations = stat_rotations_.load(std::memory_order_relaxed);
+    s.warmer_hits = stat_warmer_hits_.load(std::memory_order_relaxed);
+    s.warmer_misses = stat_warmer_misses_.load(std::memory_order_relaxed);
+    s.retire_enqueues = stat_retire_enqueues_.load(std::memory_order_relaxed);
+    s.retire_segments = stat_retire_segments_.load(std::memory_order_relaxed);
+    s.rotate_max_ns = stat_rotate_max_ns_.load(std::memory_order_relaxed);
+    s.fallback_load_max_ns =
+        stat_fallback_load_max_ns_.load(std::memory_order_relaxed);
+    s.retire_max_ns = stat_retire_max_ns_.load(std::memory_order_relaxed);
+    return s;
+  }
+
+  void resetStats() {
+    stat_rotations_.store(0, std::memory_order_relaxed);
+    stat_warmer_hits_.store(0, std::memory_order_relaxed);
+    stat_warmer_misses_.store(0, std::memory_order_relaxed);
+    stat_retire_enqueues_.store(0, std::memory_order_relaxed);
+    stat_retire_segments_.store(0, std::memory_order_relaxed);
+    stat_rotate_max_ns_.store(0, std::memory_order_relaxed);
+    stat_fallback_load_max_ns_.store(0, std::memory_order_relaxed);
+    stat_retire_max_ns_.store(0, std::memory_order_relaxed);
+  }
+#endif
 
 private:
   const LocationPtr location_;
@@ -223,12 +269,29 @@ private:
   AppenderWarmerPtr appender_warmer_;
   std::deque<SegmentPtr> retired_segments_;
 
+  // Retire thread: segment cleanup off the appender hot path
   std::mutex retire_mutex_;
   std::condition_variable retire_cv_;
   std::deque<SegmentPtr> retire_queue_;
   std::atomic<bool> retire_running_{false};
   std::thread retire_thread_;
 
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+  std::atomic<uint64_t> stat_rotations_{0};
+  std::atomic<uint64_t> stat_warmer_hits_{0};
+  std::atomic<uint64_t> stat_warmer_misses_{0};
+  std::atomic<uint64_t> stat_retire_enqueues_{0};
+  std::atomic<uint64_t> stat_retire_segments_{0};
+  std::atomic<uint64_t> stat_rotate_max_ns_{0};
+  std::atomic<uint64_t> stat_fallback_load_max_ns_{0};
+  std::atomic<uint64_t> stat_retire_max_ns_{0};
+
+  static void recordMax(std::atomic<uint64_t> &target, uint64_t value) {
+    detail::recordMax(target, value);
+  }
+#endif
+
+  // Sequence increment: RMW for MPSC, plain load+store for SPSC
   uint64_t nextSeq() {
     if constexpr (AppenderPolicy::serialize) {
       return current_sequence_.fetch_add(1, std::memory_order_relaxed);
@@ -240,7 +303,12 @@ private:
   }
 
   void retireLoop() {
-
+    // Timed-poll instead of parking on a producer notify: the appender hot
+    // thread enqueues WITHOUT notifying (no FUTEX_WAKE on the rotation path),
+    // and this thread drains on a short timer. retire_cv_ is kept only so the
+    // destructor's notify_all wakes us immediately at shutdown. Runs on a
+    // housekeeping core, where the tick services the wait_for timeout (unlike
+    // an isolated nohz_full core), so it must NOT busy-spin.
     constexpr auto kPollInterval = std::chrono::milliseconds(10);
     while (true) {
       std::unique_lock<std::mutex> lock(retire_mutex_);
@@ -252,8 +320,16 @@ private:
         SegmentPtr segment = std::move(retire_queue_.front());
         retire_queue_.pop_front();
         lock.unlock();
-        segment.reset();
-
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+#endif
+        segment.reset(); // ~Segment() runs here — msync/munmap off the appender
+                         // thread
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t dt = static_cast<uint64_t>(Timestamp::now().nsec()) - t0;
+        stat_retire_segments_.fetch_add(1, std::memory_order_relaxed);
+        recordMax(stat_retire_max_ns_, dt);
+#endif
         lock.lock();
       }
       if (!retire_running_.load(std::memory_order_relaxed))
@@ -308,7 +384,9 @@ private:
     for (auto it = segment_ids.rbegin(); it != segment_ids.rend(); ++it) {
       const int segment_id = *it;
       try {
-
+        // this is for metadata scanning during appender construction
+        // so we use prefault=false to map lazily and try not to mlock old
+        // segments
         SegmentPtr segment =
             Segment::load(location_, dest_id_, segment_id, false, false);
         uintptr_t last_frame_pos = segment->header_->last_frame_position;
@@ -371,22 +449,45 @@ private:
   }
 
   void rotateSegment() {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+    const uint64_t rotate_t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+    stat_rotations_.fetch_add(1, std::memory_order_relaxed);
+#endif
     int new_segment_id =
         current_segment_id_.fetch_add(1, std::memory_order_relaxed) + 1;
     SegmentPtr next_segment;
     if (appender_warmer_) {
-
+      // Publish the new active segment to the warmer BEFORE claiming it.
+      // getWarmedSegment() clears the slot's segment_id, so if the warmer's
+      // current_segment_ still lagged by one (it was only advanced afterwards),
+      // the warmer would see this in-flight segment as neither in-ring nor
+      // behind current, treat it as a fresh warm target, and re-map + zero it
+      // while the appender is writing — silently destroying committed frames.
+      // Advancing current_segment_ first keeps the warm-ahead window strictly
+      // greater than the segment the appender is about to write.
       appender_warmer_->updateCurrentSegment(new_segment_id);
       size_t warmed_size = 0;
       std::uintptr_t warmed_addr =
           appender_warmer_->getWarmedSegment(new_segment_id, warmed_size);
       if (warmed_addr != 0) {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        stat_warmer_hits_.fetch_add(1, std::memory_order_relaxed);
+#endif
         next_segment = Segment::loadFromAddress(
             location_, dest_id_, new_segment_id, warmed_addr, prefault_);
         SPDLOG_TRACE("Using pre-warmed segment {}", new_segment_id);
       } else {
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        stat_warmer_misses_.fetch_add(1, std::memory_order_relaxed);
+        const uint64_t load_t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+#endif
         next_segment =
             Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+        const uint64_t load_dt =
+            static_cast<uint64_t>(Timestamp::now().nsec()) - load_t0;
+        recordMax(stat_fallback_load_max_ns_, load_dt);
+#endif
         SPDLOG_TRACE("Created segment {} (not pre-warmed)", new_segment_id);
       }
     } else {
@@ -422,6 +523,7 @@ private:
 
       retired_segments_.push_back(std::move(current_segment_));
 
+      // Hand overflowing segments to the retire thread
       while (retired_segments_.size() > max_retained_segments_) {
         SegmentPtr old_segment = std::move(retired_segments_.front());
         retired_segments_.pop_front();
@@ -430,19 +532,31 @@ private:
             std::lock_guard<std::mutex> lock(retire_mutex_);
             retire_queue_.push_back(std::move(old_segment));
           }
-
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+          stat_retire_enqueues_.fetch_add(1, std::memory_order_relaxed);
+#endif
+          // No retire_cv_.notify_one(): the retire thread timed-polls the
+          // queue, so the appender hot thread issues no FUTEX_WAKE here.
         }
-
+        // if !background_threads_: old_segment destroyed inline here
       }
     }
 
     current_segment_ = std::move(next_segment);
     current_frame_address_ = current_segment_->firstFrameAddress();
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+    const uint64_t rotate_dt =
+        static_cast<uint64_t>(Timestamp::now().nsec()) - rotate_t0;
+    recordMax(stat_rotate_max_ns_, rotate_dt);
+#endif
     SPDLOG_DEBUG("Rotated to segment {} at sequence {}", new_segment_id,
                  current_sequence_.load());
   }
 
-  FrameHeader *openFrame(int64_t timestamp, MsgType msg_type,
+  // Takes the raw 16-bit tag: by this point the registry it came from is
+  // irrelevant to revoq, which only stores the value.
+  template <FrameTag Tag>
+  FrameHeader *openFrame(int64_t timestamp, Tag msg_type,
                          size_t payload_size, uint16_t flags = FRAME_NORMAL) {
     size_t total_size = sizeof(FrameHeader) + payload_size;
     size_t stride = framePhysicalLength(static_cast<uint32_t>(total_size));
@@ -498,4 +612,4 @@ private:
 
 using AppenderPtr = std::shared_ptr<Appender<>>;
 
-} // namespace racer::revoq
+} // namespace revoq

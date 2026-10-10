@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 RevoRacer
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
 """Round-trip tests: Python↔Python and verifying zero-copy memoryview."""
 import struct
 import pytest

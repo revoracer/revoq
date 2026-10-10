@@ -4,7 +4,7 @@
 
 #include <stdexcept>
 
-namespace racer {
+
 namespace revoq {
 class RevoqError : public std::runtime_error {
 public:
@@ -12,4 +12,4 @@ public:
       : std::runtime_error(message) {}
 };
 } // namespace revoq
-} // namespace racer
+

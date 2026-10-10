@@ -19,8 +19,13 @@
 #include <unistd.h>
 #endif
 
-namespace racer::revoq::detail {
+namespace revoq::detail {
 
+// Lost-notify-safe worker shutdown, shared by the cursor and appender warmers.
+// Flips `running` false under `m` — the same lock the worker's cv predicate
+// uses — so the notify below cannot fall into the gap between the worker
+// evaluating its predicate as false and atomically releasing the lock to sleep.
+// Returns whether the worker had been running (false => already stopped).
 inline bool stopAndJoin(std::atomic<bool> &running, std::mutex &m,
                         std::condition_variable &cv, std::thread &t) {
   bool was_running;
@@ -86,6 +91,12 @@ inline bool makeHousekeepingCpuSet(cpu_set_t &cpuset) {
   return cpu_count > 0;
 }
 
+// pinned_to_requested (optional out): set true ONLY when the caller-requested
+// core (background_worker_cpu >= 0) was actually pinned — false on the
+// housekeeping fallback or when no core was requested. Callers gate
+// RT/busy-poll on it: a fallback core is shared, so it must NOT run an RT
+// spinner. The bool return still reports whether the thread was pinned
+// *somewhere* (fallback included), which is all the affinity-only callers need.
 inline bool pinThreadToBackgroundCpus(pthread_t thread,
                                       int background_worker_cpu,
                                       const char *thread_name,
@@ -121,4 +132,4 @@ inline bool pinThreadToBackgroundCpus(pthread_t thread,
 
 #endif
 
-} // namespace racer::revoq::detail
+} // namespace revoq::detail

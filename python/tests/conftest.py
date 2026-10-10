@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 RevoRacer
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 RevoRacer
 """Shared fixtures for revoq Python binding tests."""
 import tempfile
 import os

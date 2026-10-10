@@ -13,9 +13,20 @@
 #include <revoq/Appender.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
 
 namespace {
+
+// revoq::MsgType only carries the transport markers (SegmentEnd,
+// SessionStart/End); payload tags like Trade belong to the registry that
+// owns the payload (revomd::MsgType for real market data). This example
+// doesn't use real market-data types, so it claims its own tag enum instead
+// of inventing nonexistent revoq::MsgType members.
+enum class ExampleMsgType : std::uint16_t {
+  Trade = 100,
+  BBO = 106,
+  BookReset = 108,
+};
 
 struct Trade {
   std::int64_t timestamp;
@@ -50,8 +61,8 @@ private:
   fs::path path_;
 };
 
-template <typename T>
-void publish(Appender<> &appender, std::int64_t timestamp, MsgType msg_type,
+template <typename T, FrameTag Tag>
+void publish(Appender<> &appender, std::int64_t timestamp, Tag msg_type,
              const T &message) {
   auto &slot = appender.openData<T>(timestamp, msg_type);
   slot = message;
@@ -78,14 +89,14 @@ int main() {
       for (int i = 0; i < messages; ++i) {
         const auto ts = static_cast<std::int64_t>(i + 1);
         if (i % 3 == 0) {
-          publish(appender, ts, MsgType::Trade,
+          publish(appender, ts, ExampleMsgType::Trade,
                   Trade{ts, 101, 100.0 + static_cast<double>(i)});
         } else if (i % 3 == 1) {
-          publish(appender, ts, MsgType::BBO,
+          publish(appender, ts, ExampleMsgType::BBO,
                   Bbo{ts, static_cast<std::uint32_t>(i),
                       static_cast<std::uint32_t>(i + 1)});
         } else {
-          appender.mark(ts, MsgType::BookReset);
+          appender.mark(ts, ExampleMsgType::BookReset);
         }
       }
     }
@@ -97,24 +108,24 @@ int main() {
     int handled = 0;
     std::uint64_t checksum = 0;
     auto dispatcher = [&](MergingCursor::FrameView current) {
-      switch (static_cast<MsgType>(current.msg_type)) {
-      case MsgType::Trade: {
+      switch (static_cast<std::int32_t>(current.msg_type)) {
+      case static_cast<std::int32_t>(ExampleMsgType::Trade): {
         const auto &trade = current->data<Trade>();
         checksum ^= static_cast<std::uint64_t>(trade.symbol_id) +
                     static_cast<std::uint64_t>(trade.price);
         ++handled;
         break;
       }
-      case MsgType::BBO: {
+      case static_cast<std::int32_t>(ExampleMsgType::BBO): {
         const auto &bbo = current->data<Bbo>();
         checksum ^= bbo.bid_size + bbo.ask_size;
         ++handled;
         break;
       }
-      case MsgType::BookReset:
+      case static_cast<std::int32_t>(ExampleMsgType::BookReset):
         ++handled;
         break;
-      case MsgType::SegmentEnd:
+      case static_cast<std::int32_t>(MsgType::SegmentEnd):
         break;
       default:
         throw std::runtime_error("unexpected message type");

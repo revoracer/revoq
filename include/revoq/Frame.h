@@ -11,11 +11,12 @@
 
 #include <spdlog/spdlog.h>
 
-namespace racer::revoq {
+namespace revoq {
 
 inline constexpr std::uint32_t SEGMENT_VERSION = 2;
 inline constexpr std::size_t FRAME_ALIGNMENT = 64;
 
+// Frame flags
 enum FrameFlags : uint16_t {
   FRAME_NORMAL = 0x0000,
   FRAME_COMPRESSED = 0x0001,
@@ -26,7 +27,8 @@ enum FrameFlags : uint16_t {
 
 #pragma pack(push, 1)
 struct alignas(32) FrameHeader {
-
+  // Logical frame length in bytes. This is published last with release
+  // semantics; physical frame stride is align_up(length, FRAME_ALIGNMENT).
   std::atomic<std::uint32_t> length{0};
   std::uint16_t msg_type{0};
   std::uint16_t flags{FRAME_NORMAL};
@@ -50,6 +52,8 @@ constexpr std::uint32_t framePhysicalLength(std::uint32_t logical_length) {
 
 class Frame {
 public:
+  // Lock-free but not wait-free committed-frame check. Loads the published
+  // frame length and validates that the current frame is complete
   [[nodiscard]] bool hasData() const { return hasData(getFrameLength()); }
 
   [[nodiscard]] bool hasData(std::uint32_t frame_length) const {
@@ -145,7 +149,7 @@ private:
   }
 
   void setDataLength(std::uint32_t length) {
-
+    // Write data length LAST with release semantics for visibility
     header_->length.store(sizeof(FrameHeader) + length,
                           std::memory_order_release);
   }
@@ -170,4 +174,4 @@ private:
 
 using FramePtr = std::shared_ptr<Frame>;
 
-} // namespace racer::revoq
+} // namespace revoq
