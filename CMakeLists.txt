@@ -10,6 +10,7 @@ option(REVOQ_BUILD_TESTS "Build revoq C++ tests" ON)
 option(REVOQ_BUILD_BENCHMARKS "Build revoq benchmarks" OFF)
 option(REVOQ_BUILD_EXAMPLES "Build revoq examples" ON)
 option(REVOQ_BUILD_PYTHON "Build revoq Python bindings" OFF)
+option(REVOQ_ENABLE_DIAGNOSTICS "Compile warmer/cursor runtime diagnostics counters" OFF)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -77,6 +78,11 @@ target_link_libraries(revoq
         fmt::fmt
         spdlog::spdlog
         Threads::Threads
+)
+
+target_compile_definitions(revoq
+    INTERFACE
+        $<$<BOOL:${REVOQ_ENABLE_DIAGNOSTICS}>:REVOQ_ENABLE_DIAGNOSTICS>
 )
 
 add_library(revoq::revoq ALIAS revoq)

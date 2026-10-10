@@ -8,6 +8,7 @@ BUILD_TESTS="ON"
 BUILD_EXAMPLES="ON"
 BUILD_BENCHMARKS="OFF"
 BUILD_PYTHON="OFF"
+ENABLE_DIAGNOSTICS="OFF"
 RUN_TESTS="OFF"
 RUN_PYTHON_TESTS="OFF"
 CONFIGURE_ONLY="OFF"
@@ -33,6 +34,7 @@ Options:
   -j, --jobs N         Parallel build jobs
   --no-tests          Do not build C++ tests
   --no-examples       Do not build examples
+  --enable-diagnostics Compile warmer/cursor runtime diagnostics counters
   --configure-only    Configure without building
   --revobase-path DIR  Build against this revobase checkout instead of the
                         pinned submodule (skips updating external/revobase)
@@ -141,6 +143,10 @@ while [[ $# -gt 0 ]]; do
       BUILD_EXAMPLES="OFF"
       shift
       ;;
+    --enable-diagnostics)
+      ENABLE_DIAGNOSTICS="ON"
+      shift
+      ;;
     --configure-only)
       CONFIGURE_ONLY="ON"
       shift
@@ -200,6 +206,7 @@ cmake_args=(
   -DREVOQ_BUILD_EXAMPLES="${BUILD_EXAMPLES}"
   -DREVOQ_BUILD_BENCHMARKS="${BUILD_BENCHMARKS}"
   -DREVOQ_BUILD_PYTHON="${BUILD_PYTHON}"
+  -DREVOQ_ENABLE_DIAGNOSTICS="${ENABLE_DIAGNOSTICS}"
 )
 if [[ -n "${REVOBASE_PATH}" ]]; then
   cmake_args+=(-DREVOQ_REVOBASE_DIR="$(cd "${REVOBASE_PATH}" && pwd)")
