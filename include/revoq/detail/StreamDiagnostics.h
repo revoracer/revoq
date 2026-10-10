@@ -3,7 +3,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "TimeUtils.h"
+#include <revobase/TimeUtils.h>
 
 namespace revoq {
 
@@ -79,7 +79,7 @@ struct AppenderStats {
 namespace detail {
 
 inline uint64_t revoqNowNs() {
-  return static_cast<uint64_t>(Timestamp::now().nsec());
+  return static_cast<uint64_t>(revobase::Timestamp::now().nsec());
 }
 
 inline void recordMax(std::atomic<uint64_t> &target, uint64_t value) {

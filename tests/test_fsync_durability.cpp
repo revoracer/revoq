@@ -9,8 +9,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include "Appender.h"
-#include "MergingCursor.h"
+#include <revoq/Appender.h>
+#include <revoq/MergingCursor.h>
 #include "test_helpers.h"
 
 using namespace revoq;

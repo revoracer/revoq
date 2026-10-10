@@ -12,7 +12,7 @@
 #include <cstdint>
 #include <thread>
 
-#include "CursorWarmer.h"
+#include <revoq/CursorWarmer.h>
 #include "test_helpers.h"
 
 using namespace revoq;

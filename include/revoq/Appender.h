@@ -321,12 +321,12 @@ private:
         retire_queue_.pop_front();
         lock.unlock();
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
-        const uint64_t t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+        const uint64_t t0 = static_cast<uint64_t>(revobase::Timestamp::now().nsec());
 #endif
         segment.reset(); // ~Segment() runs here — msync/munmap off the appender
                          // thread
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
-        const uint64_t dt = static_cast<uint64_t>(Timestamp::now().nsec()) - t0;
+        const uint64_t dt = static_cast<uint64_t>(revobase::Timestamp::now().nsec()) - t0;
         stat_retire_segments_.fetch_add(1, std::memory_order_relaxed);
         recordMax(stat_retire_max_ns_, dt);
 #endif
@@ -450,7 +450,7 @@ private:
 
   void rotateSegment() {
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
-    const uint64_t rotate_t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+    const uint64_t rotate_t0 = static_cast<uint64_t>(revobase::Timestamp::now().nsec());
     stat_rotations_.fetch_add(1, std::memory_order_relaxed);
 #endif
     int new_segment_id =
@@ -479,13 +479,13 @@ private:
       } else {
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         stat_warmer_misses_.fetch_add(1, std::memory_order_relaxed);
-        const uint64_t load_t0 = static_cast<uint64_t>(Timestamp::now().nsec());
+        const uint64_t load_t0 = static_cast<uint64_t>(revobase::Timestamp::now().nsec());
 #endif
         next_segment =
             Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         const uint64_t load_dt =
-            static_cast<uint64_t>(Timestamp::now().nsec()) - load_t0;
+            static_cast<uint64_t>(revobase::Timestamp::now().nsec()) - load_t0;
         recordMax(stat_fallback_load_max_ns_, load_dt);
 #endif
         SPDLOG_TRACE("Created segment {} (not pre-warmed)", new_segment_id);
@@ -546,7 +546,7 @@ private:
     current_frame_address_ = current_segment_->firstFrameAddress();
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
     const uint64_t rotate_dt =
-        static_cast<uint64_t>(Timestamp::now().nsec()) - rotate_t0;
+        static_cast<uint64_t>(revobase::Timestamp::now().nsec()) - rotate_t0;
     recordMax(stat_rotate_max_ns_, rotate_dt);
 #endif
     SPDLOG_DEBUG("Rotated to segment {} at sequence {}", new_segment_id,

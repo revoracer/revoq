@@ -6,11 +6,12 @@
 #include <fmt/chrono.h>
 #include <thread>
 
-#include "AppenderWarmer.h"
-#include "Segment.h"
-#include "StreamBase.h"
-#include "TimeUtils.h"
+#include <revoq/AppenderWarmer.h>
+#include <revoq/Segment.h>
+#include <revoq/StreamBase.h>
+#include <revobase/TimeUtils.h>
 
+using namespace revobase;
 using namespace revoq;
 using namespace std::chrono_literals;
 namespace fs = std::filesystem;
