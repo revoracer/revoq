@@ -52,7 +52,9 @@ using SegmentPtr = std::shared_ptr<Segment>;
 class Segment {
 public:
   ~Segment() {
-    if (owned_by_segment_ && header_) {
+    // Every Segment owns its mapping: load() maps it, and loadFromAddress()
+    // takes it over from a warmer that has already given up ownership.
+    if (header_) {
       // MARKETDATA/RESEARCHDATA: no msync — rely on kernel writeback.
       // All others: async msync on the retire thread normally
       const auto msync_mode = (location_->category == Category::MARKETDATA ||
@@ -217,9 +219,8 @@ public:
     SPDLOG_TRACE("Loaded segment {}/{:08x}.{}.stream ({})", location->uname,
                  dest_id, segment_id, is_new_segment ? "new" : "existing");
 
-    // Create and return Segment object (owned_by_segment=true)
     return std::shared_ptr<Segment>(new Segment(
-        location, dest_id, segment_id, segment_size, prefault, address, true));
+        location, dest_id, segment_id, segment_size, prefault, address));
   }
 
   // Load from pre-warmed address (avoids MmapBuffer call)
@@ -245,9 +246,11 @@ public:
     }
     SPDLOG_TRACE("Loaded pre-warmed segment {} from address 0x{:x}", segment_id,
                  address);
-    // owned_by_segment=true means this Segment object owns the memory
+    // Ownership passes to this Segment, which unmaps it on destruction. The
+    // warmer drops its claim (AppenderWarmer clears slot.is_owned;
+    // CursorWarmer zeroes warmer_addr_).
     return std::shared_ptr<Segment>(new Segment(
-        location, dest_id, segment_id, segment_size, prefault, address, true));
+        location, dest_id, segment_id, segment_size, prefault, address));
   }
 
   // Compute only: no filesystem access.
@@ -316,15 +319,12 @@ private:
   const bool prefault_;
   const std::size_t size_;
   const SegmentHeader *header_;
-  const bool owned_by_segment_; // Track if we own the memory
 
   Segment(const LocationPtr &location, std::uint32_t dest_id, int segment_id,
-          std::size_t size, bool prefault, std::uintptr_t address,
-          bool owned = true)
+          std::size_t size, bool prefault, std::uintptr_t address)
       : location_(location), dest_id_(dest_id), segment_id_(segment_id),
         prefault_(prefault), size_(size),
-        header_(reinterpret_cast<SegmentHeader *>(address)),
-        owned_by_segment_(owned) {}
+        header_(reinterpret_cast<SegmentHeader *>(address)) {}
 
   // it is actually an offset from the beginning add
   void setLastFramePosition(std::uint64_t position) {
