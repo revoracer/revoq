@@ -20,7 +20,17 @@
 #include <revoq/Appender.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
+
+// revoq::MsgType only carries transport markers; payload tags belong to the
+// payload owner.
+enum class BenchMsgType : std::uint16_t {
+  Trade = 100,
+  BookTop20 = 105,
+  BBO = 106,
+  BookReset = 108,
+  SegmentEnd = static_cast<std::uint16_t>(revoq::MsgType::SegmentEnd),
+};
 
 namespace {
 
@@ -104,7 +114,7 @@ Result runCase(std::uint64_t messages, std::size_t payload_bytes) {
 
   const auto start = std::chrono::steady_clock::now();
   for (std::uint64_t i = 0; i < messages; ++i) {
-    appender.writeBytes(static_cast<std::int64_t>(i + 1), MsgType::Trade,
+    appender.writeBytes(static_cast<std::int64_t>(i + 1), BenchMsgType::Trade,
                       payload.data(), payload.size());
   }
   const auto end = std::chrono::steady_clock::now();

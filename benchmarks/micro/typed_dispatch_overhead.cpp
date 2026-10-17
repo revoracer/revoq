@@ -19,7 +19,17 @@
 #include <revoq/TypedDispatcher.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
+
+// revoq::MsgType only carries transport markers; payload tags belong to the
+// payload owner.
+enum class BenchMsgType : std::uint16_t {
+  Trade = 100,
+  BookTop20 = 105,
+  BBO = 106,
+  BookReset = 108,
+  SegmentEnd = static_cast<std::uint16_t>(revoq::MsgType::SegmentEnd),
+};
 
 namespace {
 
@@ -28,21 +38,24 @@ constexpr std::uint32_t kDestId = 0;
 constexpr std::uint64_t kChecksumMultiplier = 11400714819323198485ull;
 
 struct Trade {
-  static constexpr MsgType kMsgType = MsgType::Trade;
+  static constexpr revoq::MsgType kMsgType =
+      static_cast<revoq::MsgType>(BenchMsgType::Trade);
   std::int64_t timestamp;
   std::uint32_t symbol_id;
   double price;
 };
 
 struct Bbo {
-  static constexpr MsgType kMsgType = MsgType::BBO;
+  static constexpr revoq::MsgType kMsgType =
+      static_cast<revoq::MsgType>(BenchMsgType::BBO);
   std::int64_t timestamp;
   std::uint32_t bid_size;
   std::uint32_t ask_size;
 };
 
 struct BookReset {
-  static constexpr MsgType kMsgType = MsgType::BookReset;
+  static constexpr revoq::MsgType kMsgType =
+      static_cast<revoq::MsgType>(BenchMsgType::BookReset);
 };
 
 class TempDir {
@@ -100,7 +113,7 @@ std::uint64_t parseMessages(int argc, char **argv) {
 }
 
 template <typename T>
-void publish(Appender<> &appender, std::int64_t timestamp, MsgType msg_type,
+void publish(Appender<> &appender, std::int64_t timestamp, BenchMsgType msg_type,
              const T &message) {
   auto &slot = appender.openData<T>(timestamp, msg_type);
   slot = message;
@@ -116,16 +129,16 @@ void writeStream(const LocationPtr &location, std::uint64_t messages) {
     const auto ts = static_cast<std::int64_t>(i + 1);
     switch (i % 3) {
     case 0:
-      publish(appender, ts, MsgType::Trade,
+      publish(appender, ts, BenchMsgType::Trade,
               Trade{ts, 101, 100.0 + static_cast<double>(i)});
       break;
     case 1:
-      publish(appender, ts, MsgType::BBO,
+      publish(appender, ts, BenchMsgType::BBO,
               Bbo{ts, static_cast<std::uint32_t>(i),
                   static_cast<std::uint32_t>(i + 1)});
       break;
     default:
-      appender.mark(ts, MsgType::BookReset);
+      appender.mark(ts, BenchMsgType::BookReset);
       break;
     }
   }
@@ -155,7 +168,7 @@ Result runRawFrameLoop(const LocationPtr &location, std::uint64_t expected) {
 
   const auto start = std::chrono::steady_clock::now();
   while (const auto current = cursor.tryCurrentFrame()) {
-    if (static_cast<MsgType>(current.msg_type) != MsgType::SegmentEnd) {
+    if (static_cast<BenchMsgType>(current.msg_type) != BenchMsgType::SegmentEnd) {
       ++count;
       checksum += (current->getSequence() + 1) * kChecksumMultiplier;
       checksum ^= static_cast<std::uint64_t>(current.frame_length) << 32;
@@ -181,24 +194,24 @@ Result runStaticSwitch(const LocationPtr &location, std::uint64_t expected) {
   std::uint64_t count = 0;
   std::uint64_t checksum = 0;
   auto dispatcher = [&](MergingCursor::FrameView current) {
-    switch (static_cast<MsgType>(current.msg_type)) {
-    case MsgType::Trade: {
+    switch (static_cast<BenchMsgType>(current.msg_type)) {
+    case BenchMsgType::Trade: {
       const auto &trade = current->data<Trade>();
       checksum ^= trade.symbol_id + static_cast<std::uint64_t>(trade.price);
       ++count;
       break;
     }
-    case MsgType::BBO: {
+    case BenchMsgType::BBO: {
       const auto &bbo = current->data<Bbo>();
       checksum ^= bbo.bid_size + bbo.ask_size;
       ++count;
       break;
     }
-    case MsgType::BookReset:
+    case BenchMsgType::BookReset:
       checksum ^= current->getSequence();
       ++count;
       break;
-    case MsgType::SegmentEnd:
+    case BenchMsgType::SegmentEnd:
       break;
     default:
       throw std::runtime_error("unexpected message type");

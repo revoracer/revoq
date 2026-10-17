@@ -21,7 +21,17 @@
 #include <revoq/Appender.h>
 
 namespace fs = std::filesystem;
-using namespace racer::revoq;
+using namespace revoq;
+
+// revoq::MsgType only carries transport markers; payload tags belong to the
+// payload owner.
+enum class BenchMsgType : std::uint16_t {
+  Trade = 100,
+  BookTop20 = 105,
+  BBO = 106,
+  BookReset = 108,
+  SegmentEnd = static_cast<std::uint16_t>(revoq::MsgType::SegmentEnd),
+};
 
 namespace {
 
@@ -101,7 +111,7 @@ void writeStream(const LocationPtr &location, std::uint64_t messages,
     payload[i] = static_cast<std::byte>(i);
 
   for (std::uint64_t i = 0; i < messages; ++i) {
-    appender.writeBytes(static_cast<std::int64_t>(i + 1), MsgType::Trade,
+    appender.writeBytes(static_cast<std::int64_t>(i + 1), BenchMsgType::Trade,
                       payload.data(), payload.size());
   }
 }
@@ -120,7 +130,7 @@ Result runCase(std::uint64_t messages, std::size_t payload_bytes) {
   std::uint64_t count = 0;
   std::uint64_t checksum = 0;
   auto dispatcher = [&](MergingCursor::FrameView current) {
-    if (static_cast<MsgType>(current.msg_type) != MsgType::Trade)
+    if (static_cast<BenchMsgType>(current.msg_type) != BenchMsgType::Trade)
       return;
     ++count;
     checksum += (current->getSequence() + 1) * kChecksumMultiplier;

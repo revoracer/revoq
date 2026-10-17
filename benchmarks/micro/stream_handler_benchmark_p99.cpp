@@ -54,7 +54,7 @@
 #include <revobase/CpuAffinity.h>
 #include <revobase/RealtimePriority.h>
 #include <revobase/TimeUtils.h>
-#include <revobase/portable_intrinsics.h>
+#include <revobase/PortableIntrinsics.h>
 
 #ifndef HUGETLBFS_MAGIC
 #define HUGETLBFS_MAGIC 0x958458f6
@@ -62,7 +62,17 @@
 
 namespace {
 
-using namespace racer::revoq;
+using namespace revoq;
+
+// revoq::MsgType only carries transport markers; payload tags belong to the
+// payload owner.
+enum class BenchMsgType : std::uint16_t {
+  Trade = 100,
+  BookTop20 = 105,
+  BBO = 106,
+  BookReset = 108,
+  SegmentEnd = static_cast<std::uint16_t>(revoq::MsgType::SegmentEnd),
+};
 using revobase::Timestamp;
 
 constexpr std::uint32_t kDestId = 0;
@@ -442,19 +452,19 @@ std::uint64_t pseudoRandom(std::uint64_t value) {
   return value ^ (value >> 31U);
 }
 
-MsgType messageTypeFor(std::uint64_t sequence) {
-  static constexpr std::array<MsgType, 4> types{
-      MsgType::Trade,
-      MsgType::BookTop20,
-      MsgType::BBO,
-      MsgType::BookReset,
+BenchMsgType messageTypeFor(std::uint64_t sequence) {
+  static constexpr std::array<BenchMsgType, 4> types{
+      BenchMsgType::Trade,
+      BenchMsgType::BookTop20,
+      BenchMsgType::BBO,
+      BenchMsgType::BookReset,
   };
   return types[pseudoRandom(sequence) & 3U];
 }
 
 template <typename T>
 void writeTypedFrame(Appender<> &appender, std::int64_t gen_time,
-                     MsgType msg_type, std::uint64_t sequence) {
+                     BenchMsgType msg_type, std::uint64_t sequence) {
   auto &message = appender.openData<T>(gen_time, msg_type);
   message = T{
       .sequence = sequence,
@@ -472,16 +482,16 @@ void writeFrameSized(Appender<> &appender, std::uint64_t sequence,
                      std::int64_t gen_time) {
   const auto msg_type = messageTypeFor(sequence);
   switch (msg_type) {
-  case MsgType::Trade:
+  case BenchMsgType::Trade:
     return writeTypedFrame<BenchMessage<0, Bytes>>(appender, gen_time, msg_type,
                                                    sequence);
-  case MsgType::BookTop20:
+  case BenchMsgType::BookTop20:
     return writeTypedFrame<BenchMessage<1, Bytes>>(appender, gen_time, msg_type,
                                                    sequence);
-  case MsgType::BBO:
+  case BenchMsgType::BBO:
     return writeTypedFrame<BenchMessage<2, Bytes>>(appender, gen_time, msg_type,
                                                    sequence);
-  case MsgType::BookReset:
+  case BenchMsgType::BookReset:
     return writeTypedFrame<BenchMessage<3, Bytes>>(appender, gen_time, msg_type,
                                                    sequence);
   default:
@@ -590,16 +600,16 @@ public:
 private:
   template <std::size_t Bytes>
   void dispatch(MergingCursor::FrameView current) {
-    switch (static_cast<MsgType>(current.msg_type)) {
-    case MsgType::Trade:
+    switch (static_cast<BenchMsgType>(current.msg_type)) {
+    case BenchMsgType::Trade:
       return handle<BenchMessage<0, Bytes>>(current);
-    case MsgType::BookTop20:
+    case BenchMsgType::BookTop20:
       return handle<BenchMessage<1, Bytes>>(current);
-    case MsgType::BBO:
+    case BenchMsgType::BBO:
       return handle<BenchMessage<2, Bytes>>(current);
-    case MsgType::BookReset:
+    case BenchMsgType::BookReset:
       return handle<BenchMessage<3, Bytes>>(current);
-    case MsgType::SegmentEnd:
+    case BenchMsgType::SegmentEnd:
       return;
     default:
       throw std::runtime_error("unexpected frame type in benchmark");
