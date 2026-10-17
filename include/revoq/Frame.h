@@ -16,7 +16,6 @@ namespace revoq {
 inline constexpr std::uint32_t SEGMENT_VERSION = 2;
 inline constexpr std::size_t FRAME_ALIGNMENT = 64;
 
-// Frame flags
 enum FrameFlags : uint16_t {
   FRAME_NORMAL = 0x0000,
   FRAME_COMPRESSED = 0x0001,
@@ -169,7 +168,6 @@ private:
   void setFlags(uint16_t flags) { header_->flags = flags; }
 
   friend class Stream;
-  template <typename> friend class Appender;
 };
 
 using FramePtr = std::shared_ptr<Frame>;

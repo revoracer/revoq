@@ -337,8 +337,8 @@ private:
   bool warmSegmentIntoSlot(int64_t segment_id, SegmentSlot &slot,
                            uint64_t seq) {
     std::string segment_file =
-        Segment::getSegmentPath(location_, dest_id_,
-                                static_cast<int>(segment_id))
+        Segment::makeSegmentPath(location_, dest_id_,
+                                 static_cast<int>(segment_id))
             .string();
     assert(!segment_file.empty());
     const auto t0 = revobase::Timestamp::now();

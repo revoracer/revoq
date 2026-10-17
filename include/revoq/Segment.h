@@ -21,7 +21,6 @@ constexpr std::uint32_t SEGMENT_SIZE_DEFAULT = 2 * 1024 * 1024;      // 2 MB
 // Optimized segment size lookup with inline hint
 inline static std::uint32_t findSegmentSize(const LocationPtr &location,
                                             std::uint32_t dest_id) {
-  // Fast path: marketdata and research use large segments
   if (location->category == Category::MARKETDATA ||
       location->category == Category::RESEARCHDATA) {
     return SEGMENT_SIZE_MARKETDATA;
@@ -30,7 +29,6 @@ inline static std::uint32_t findSegmentSize(const LocationPtr &location,
   if (location->category == Category::EXECUTION && dest_id != 0) {
     return SEGMENT_SIZE_EXECUTION;
   }
-  // Default case
   return SEGMENT_SIZE_DEFAULT;
 }
 #pragma pack(push, 1)
@@ -56,8 +54,7 @@ public:
   ~Segment() {
     if (owned_by_segment_ && header_) {
       // MARKETDATA/RESEARCHDATA: no msync — rely on kernel writeback.
-      // All others: async msync on the retire thread (never the appender
-      // thread).
+      // All others: async msync on the retire thread normally
       const auto msync_mode = (location_->category == Category::MARKETDATA ||
                                location_->category == Category::RESEARCHDATA)
                                   ? revobase::os::MsyncMode::NONE
@@ -102,8 +99,9 @@ public:
     return reinterpret_cast<std::uintptr_t>(header_);
   }
 
-  // lastFrameHeaderAddress makes more sense
   [[nodiscard]] std::uintptr_t addressBorder() const {
+    // the last FRAME_ALIGNMENT bytes of every segment are kept free for the
+    // SegmentEnd sentinel
     return address() + header_->segment_size - revoq::FRAME_ALIGNMENT;
   }
 
@@ -128,16 +126,12 @@ public:
                          std::uint32_t dest_id, int segment_id, bool is_writing,
                          bool prefault) {
     std::uint32_t segment_size = findSegmentSize(location, dest_id);
-    // Only appenders own directory creation. getSegmentPath() routes through
-    // makeLayoutDir() → create_directories, so on the cursor slow-load path
-    // reconstruct the path directly with layoutDir() (compute only). The
-    // stream dir already exists by the time a cursor loads a segment (created
-    // at join via listSegmentId), so this cannot strand a fresh stream — it
-    // just drops a per-slow-load stat/mkdir.
-    auto path = is_writing
-                    ? getSegmentPath(location, dest_id, segment_id)
-                    : location->locator->layoutDir(location, Layout::STREAM) /
-                          segmentFileName(dest_id, segment_id);
+    // Only appenders own directory creation. The stream dir already exists by
+    // the time a cursor loads a segment (created at join via listSegmentId),
+    // so the compute-only path cannot strand a fresh stream — it just drops a
+    // per-slow-load stat/mkdir.
+    auto path = is_writing ? makeSegmentPath(location, dest_id, segment_id)
+                           : segmentPath(location, dest_id, segment_id);
     std::uintptr_t address = 0;
     try {
       address = revobase::os::MmapBuffer::loadMmapBuffer(path.string(), segment_size,
@@ -256,16 +250,26 @@ public:
         location, dest_id, segment_id, segment_size, prefault, address, true));
   }
 
-  static std::filesystem::path getSegmentPath(const LocationPtr &location,
-                                              std::uint32_t dest_id, int id) {
-    // let's create the directory but not the file
+  // Compute only: no filesystem access.
+  [[nodiscard]] static std::filesystem::path
+  segmentPath(const LocationPtr &location, std::uint32_t dest_id,
+              int segment_id) {
+    return location->locator->layoutDir(location, Layout::STREAM) /
+           segmentFileName(dest_id, segment_id);
+  }
+
+  // Writer-side: creates the stream directory (not the segment file), then
+  // returns the path. Readers use segmentPath().
+  static std::filesystem::path makeSegmentPath(const LocationPtr &location,
+                                               std::uint32_t dest_id,
+                                               int segment_id) {
     const auto dir = location->locator->makeLayoutDir(location, Layout::STREAM);
-    return dir / segmentFileName(dest_id, id);
+    return dir / segmentFileName(dest_id, segment_id);
   }
 
   [[nodiscard]] static std::string segmentFileName(std::uint32_t dest_id,
-                                                   int id) {
-    return fmt::format("{:08x}.{}.stream", dest_id, id);
+                                                   int segment_id) {
+    return fmt::format("{:08x}.{}.stream", dest_id, segment_id);
   }
 
   static int findSegmentId(const revoq::LocationPtr &location,

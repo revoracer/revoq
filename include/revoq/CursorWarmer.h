@@ -393,8 +393,8 @@ private:
       recordWarmerCpu();
 #endif
 
-      auto path = Segment::getSegmentPath(location_, dest_id_,
-                                          static_cast<int>(segment_to_warm));
+      auto path = Segment::segmentPath(location_, dest_id_,
+                                       static_cast<int>(segment_to_warm));
       // Build the string form once; it is consumed by both the map and the
       // populate calls below.
       const std::string path_str = path.string();

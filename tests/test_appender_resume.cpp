@@ -386,7 +386,7 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   uint32_t dest_id = 0x12345678;
-  const auto segment1 = Segment::getSegmentPath(location, dest_id, 1);
+  const auto segment1 = Segment::segmentPath(location, dest_id, 1);
 
   SECTION("Read-only load rejects zero-byte segment") {
     fs::create_directories(segment1.parent_path());
@@ -415,7 +415,7 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
       appender->mark(2'000'000, MsgType::SegmentEnd);
     }
 
-    const auto segment2 = Segment::getSegmentPath(location, dest_id, 2);
+    const auto segment2 = Segment::segmentPath(location, dest_id, 2);
     REQUIRE_FALSE(fs::exists(segment2));
 
     MergingCursor cursor(

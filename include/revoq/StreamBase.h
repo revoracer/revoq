@@ -39,7 +39,10 @@ static const std::unordered_map<std::string, Category> str2category{
     {"marketdata", Category::MARKETDATA},
     {"researchdata", Category::RESEARCHDATA},
     {"executiondata", Category::EXECUTION},
-    {"log", Category::LOG}};
+    {"log", Category::LOG},
+    {"system", Category::SYSTEM},
+    {"strategy", Category::STRATEGY}
+  };
 
 enum class Layout : std::int8_t { UNKNOWN = 0, STREAM, LOG };
 
@@ -54,6 +57,10 @@ constexpr const char *categoryToStr(Category c) noexcept {
     return "executiondata";
   case Category::LOG:
     return "log";
+  case Category::SYSTEM:
+    return "system";
+  case Category::STRATEGY:
+    return "strategy";
   default:
     return "unknown";
   }
@@ -130,12 +137,6 @@ concept FrameTag =
 // inside NativeEventHeader, which is why venue count does not enter this
 // budget. Strategy/telemetry gets the largest block because it grows fastest:
 // those records are cheap to add, and there is one family per strategy.
-//
-// Execution previously sat at 1000-1199 holding OrderUpdate / PositionUpdate /
-// AccountBalance / ExecutionReport / TradingSignal / StrategyState /
-// MarketDataRequest. Nothing ever referenced or wrote them, so that block was
-// never persisted and was free to move; it was widened to 10200-19999 and
-// split from strategy/telemetry, which has a different growth profile.
 //
 // The 10000-10199 block sits mid-space rather than at the top because its
 // values are frozen — see below. Routing a merged stream is a range test

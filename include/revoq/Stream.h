@@ -259,8 +259,8 @@ private:
   }
 
   [[nodiscard]] bool segmentFileExists(int segment_id) const {
-    // Reconstruct the segment path directly; getSegmentPath() routes through
-    // makeLayoutDir() and would reintroduce a stat/mkdir path on rotation.
+    // Build from the cached stream_dir_ rather than Segment::segmentPath(),
+    // which would recompute layoutDir() on every rotation.
     const auto path =
         stream_dir_ / Segment::segmentFileName(dest_id_, segment_id);
     return access(path.c_str(), F_OK) == 0;
