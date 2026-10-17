@@ -2,6 +2,7 @@
 // Copyright 2026 RevoRacer
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -51,24 +52,27 @@ using SegmentPtr = std::shared_ptr<Segment>;
 
 class Segment {
 public:
+  // Each Segment owns one mapping; a copy would unmap it twice.
+  Segment(const Segment &) = delete;
+  Segment &operator=(const Segment &) = delete;
+
   ~Segment() {
     // Every Segment owns its mapping: load() maps it, and loadFromAddress()
     // takes it over from a warmer that has already given up ownership.
-    if (header_) {
-      // MARKETDATA/RESEARCHDATA: no msync — rely on kernel writeback.
-      // All others: async msync on the retire thread normally
-      const auto msync_mode = (location_->category == Category::MARKETDATA ||
-                               location_->category == Category::RESEARCHDATA)
-                                  ? revobase::os::MsyncMode::NONE
-                                  : revobase::os::MsyncMode::ASYNC;
-      if (revobase::os::MmapBuffer::releaseMmapBuffer(address(), size_, prefault_,
-                                                   msync_mode)) {
-        SPDLOG_TRACE("released segment {}/{:08x}.{}.stream", location_->uname,
-                     dest_id_, segment_id_);
-      } else {
-        SPDLOG_ERROR("cannot release segment {}/{:08x}.{}.stream",
-                     location_->uname, dest_id_, segment_id_);
-      }
+
+    // MARKETDATA/RESEARCHDATA: no msync — rely on kernel writeback.
+    // All others: async msync on the retire thread normally
+    const auto msync_mode = (location_->category == Category::MARKETDATA ||
+                             location_->category == Category::RESEARCHDATA)
+                                ? revobase::os::MsyncMode::NONE
+                                : revobase::os::MsyncMode::ASYNC;
+    if (revobase::os::MmapBuffer::releaseMmapBuffer(address(), size_, prefault_,
+                                                    msync_mode)) {
+      SPDLOG_TRACE("released segment {}/{:08x}.{}.stream", location_->uname,
+                   dest_id_, segment_id_);
+    } else {
+      SPDLOG_ERROR("cannot release segment {}/{:08x}.{}.stream",
+                   location_->uname, dest_id_, segment_id_);
     }
   }
 
@@ -324,7 +328,10 @@ private:
           std::size_t size, bool prefault, std::uintptr_t address)
       : location_(location), dest_id_(dest_id), segment_id_(segment_id),
         prefault_(prefault), size_(size),
-        header_(reinterpret_cast<SegmentHeader *>(address)) {}
+        header_(reinterpret_cast<SegmentHeader *>(address)) {
+    // ~Segment() unmaps header_ unconditionally; the factories reject null.
+    assert(address != 0);
+  }
 
   // it is actually an offset from the beginning add
   void setLastFramePosition(std::uint64_t position) {
