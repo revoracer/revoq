@@ -20,8 +20,9 @@
 #include "StreamBase.h"
 #include "detail/StreamPlatform.h"
 
-#include <revobase/TimeUtils.h>
+#include <revobase/CpuAffinity.h>
 #include <revobase/PortableIntrinsics.h>
+#include <revobase/TimeUtils.h>
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
 #include "detail/StreamDiagnostics.h"
 #endif
@@ -47,8 +48,8 @@ struct AppenderOptions {
   size_t warmup_segments = 0;
   int warmer_cpu_core = -1;
   // Retire timed-polls, so it belongs on a housekeeping core (-1 => the
-  // housekeeping fallback in pinThreadToBackgroundCpus). Distinct from the
-  // busy-poll warmer's dedicated core (warmer_cpu_core).
+  // housekeeping fallback in CpuAffinity::pinThreadOrHousekeeping). Distinct
+  // from the busy-poll warmer's dedicated core (warmer_cpu_core).
   int retire_cpu = -1;
   bool background_threads = true;
   size_t retained_segment_limit = DEFAULT_STREAM_APPENDER_RETAINED_SEGMENTS;
@@ -116,9 +117,9 @@ public:
 #ifdef __linux__
       // Retire timed-polls on a housekeeping core (must NOT busy-spin). -1 uses
       // the housekeeping fallback.
-      detail::pinThreadToBackgroundCpus(retire_thread_.native_handle(),
-                                        options.retire_cpu,
-                                        "appender retire thread");
+      revobase::system::CpuAffinity::pinThreadOrHousekeeping(
+          retire_thread_.native_handle(), options.retire_cpu,
+          "appender retire thread");
 #endif
     }
   }

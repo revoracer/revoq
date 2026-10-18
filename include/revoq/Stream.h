@@ -21,6 +21,7 @@
 #include "StreamBase.h"
 #include "detail/StreamPlatform.h"
 
+#include <revobase/CpuAffinity.h>
 #include <revobase/TimeUtils.h>
 
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
@@ -61,8 +62,10 @@ public:
     retire_thread_ = std::thread(&Stream::retireLoop, this);
 
 #ifdef __linux__
-    const bool retire_pinned = detail::pinThreadToBackgroundCpus(
-        retire_thread_.native_handle(), retire_cpu_, "cursor retire thread");
+    const bool retire_pinned =
+        revobase::system::CpuAffinity::pinThreadOrHousekeeping(
+            retire_thread_.native_handle(), retire_cpu_,
+            "cursor retire thread");
     assert(retire_pinned && "cursor retire thread affinity pin failed");
 #endif
 

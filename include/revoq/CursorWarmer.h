@@ -18,9 +18,10 @@
 #include "Segment.h"
 #include "StreamBase.h"
 #include "detail/StreamPlatform.h"
+#include <revobase/CpuAffinity.h>
 #include <revobase/MmapBuffer.h>
-#include <revobase/RealtimePriority.h>
 #include <revobase/PortableIntrinsics.h>
+#include <revobase/RealtimePriority.h>
 
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
 #include "detail/StreamDiagnostics.h"
@@ -84,7 +85,7 @@ public:
     thread_ = std::thread(&CursorWarmer::warmerLoop, this);
     bool pinned_to_requested = false;
 #ifdef __linux__
-    const bool pinned = detail::pinThreadToBackgroundCpus(
+    const bool pinned = revobase::system::CpuAffinity::pinThreadOrHousekeeping(
         thread_.native_handle(), background_worker_cpu, "cursor warmer thread",
         &pinned_to_requested);
     assert(pinned && "cursor warmer thread affinity pin failed");

@@ -24,7 +24,8 @@ struct MergingCursorOptions {
   int warmer_timeout_ms = 5000;
   // Warmer busy-polls, so it wants a dedicated (ideally nohz_full) core.
   // Retire timed-polls and tolerates latency, so it belongs on a housekeeping
-  // core (-1 => the housekeeping fallback in pinThreadToBackgroundCpus).
+  // core (-1 => the housekeeping fallback in
+  // CpuAffinity::pinThreadOrHousekeeping).
   int warmer_cpu = -1;
   int retire_cpu = -1;
 };
