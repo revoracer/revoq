@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <stdexcept>
 
 #include "Frame.h"
 #include "RevoqError.h"
@@ -47,6 +48,40 @@ static_assert(sizeof(SegmentHeader) == 64,
 static_assert(alignof(SegmentHeader) == 64,
               "SegmentHeader must be cache-line aligned");
 
+// When a segment's pages get established, i.e. who pays the page faults.
+enum class SegmentPopulate {
+  // Map only. The hot path takes a soft page fault on first touch of each
+  // page.
+  Lazy,
+  // Populate the whole segment synchronously when it is mapped, on the thread
+  // that maps it: rotation stalls for the populate, then nothing faults.
+  Inline,
+  // A warmer thread maps and populates upcoming segments ahead of rotation, so
+  // the hot path neither stalls nor faults. Requires background threads. A
+  // segment the warmer has not delivered is mapped Lazy, except the appender's
+  // starting segment, which is populated at construction.
+  Background,
+};
+
+inline void validateSegmentPopulate(SegmentPopulate populate, bool lock_pages,
+                                    bool background_threads) {
+  if (populate == SegmentPopulate::Background && !background_threads)
+    throw std::invalid_argument(
+        "SegmentPopulate::Background requires background_threads");
+  // mlock faults every page in, so a locked segment is never lazy.
+  if (populate == SegmentPopulate::Lazy && lock_pages)
+    throw std::invalid_argument(
+        "lock_pages requires SegmentPopulate::Inline or Background");
+}
+
+// mmap options for a segment mapped synchronously by the calling thread.
+inline revobase::os::MmapLoadOptions segmentMapOptions(SegmentPopulate populate,
+                                                       bool lock_pages) {
+  if (populate != SegmentPopulate::Inline)
+    return {};
+  return {.populate = true, .lock_pages = lock_pages};
+}
+
 class Segment;
 using SegmentPtr = std::shared_ptr<Segment>;
 
@@ -66,7 +101,7 @@ public:
                              location_->category == Category::RESEARCHDATA)
                                 ? revobase::os::MsyncMode::NONE
                                 : revobase::os::MsyncMode::ASYNC;
-    if (revobase::os::MmapBuffer::releaseMmapBuffer(address(), size_, prefault_,
+    if (revobase::os::MmapBuffer::releaseMmapBuffer(address(), size_, locked_,
                                                     msync_mode)) {
       SPDLOG_TRACE("released segment {}/{:08x}.{}.stream", location_->uname,
                    dest_id_, segment_id_);
@@ -130,7 +165,7 @@ public:
 
   static SegmentPtr load(const revoq::LocationPtr &location,
                          std::uint32_t dest_id, int segment_id, bool is_writing,
-                         bool prefault) {
+                         revobase::os::MmapLoadOptions map_options = {}) {
     std::uint32_t segment_size = findSegmentSize(location, dest_id);
     // Only appenders own directory creation. The stream dir already exists by
     // the time a cursor loads a segment (created at join via listSegmentId),
@@ -138,10 +173,11 @@ public:
     // per-slow-load stat/mkdir.
     auto path = is_writing ? makeSegmentPath(location, dest_id, segment_id)
                            : segmentPath(location, dest_id, segment_id);
+    const bool locked = map_options.lock_pages;
     std::uintptr_t address = 0;
     try {
-      address = revobase::os::MmapBuffer::loadMmapBuffer(path.string(), segment_size,
-                                               is_writing, prefault);
+      address = revobase::os::MmapBuffer::loadMmapBuffer(
+          path.string(), segment_size, is_writing, map_options);
     } catch (const std::exception &e) {
       throw RevoqError(fmt::format("Failed to mmap segment {}: {}",
                                    path.string(), e.what()));
@@ -156,8 +192,8 @@ public:
     bool is_new_segment = (header->last_frame_position == 0);
     if (is_new_segment) {
       if (!is_writing) {
-        revobase::os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                          revobase::os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            address, segment_size, locked, revobase::os::MsyncMode::NONE);
         throw RevoqError(
             fmt::format("Uninitialized segment {}", path.string()));
       }
@@ -182,8 +218,8 @@ public:
 
     // Validation - check version
     if (header->version != SEGMENT_VERSION) {
-      revobase::os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        revobase::os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, locked, revobase::os::MsyncMode::NONE);
       throw RevoqError(
           fmt::format("Version mismatch for segment {}, required {}, found {}",
                       path.string(), SEGMENT_VERSION, header->version));
@@ -191,8 +227,8 @@ public:
 
     // Validation - check header length
     if (header->segment_header_length != sizeof(SegmentHeader)) {
-      revobase::os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        revobase::os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, locked, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Header length mismatch for segment {}, required {}, found {}",
           path.string(), sizeof(SegmentHeader), header->segment_header_length));
@@ -200,8 +236,8 @@ public:
 
     // Validation - check segment size
     if (header->segment_size != segment_size) {
-      revobase::os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        revobase::os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, locked, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Segment size mismatch for segment {}, required {}, found {}",
           path.string(), segment_size, header->segment_size));
@@ -212,8 +248,8 @@ public:
       SPDLOG_WARN(
           "Invalid last_frame_position {} for segment {} (size {}), resetting",
           header->last_frame_position, path.string(), segment_size);
-      revobase::os::MmapBuffer::releaseMmapBuffer(address, segment_size, prefault,
-                                        revobase::os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          address, segment_size, locked, revobase::os::MsyncMode::NONE);
       throw RevoqError(fmt::format(
           "Invalid last_frame_position {} for segment {} (size {}), resetting",
           header->last_frame_position, path.string(), segment_size));
@@ -223,14 +259,14 @@ public:
     SPDLOG_TRACE("Loaded segment {}/{:08x}.{}.stream ({})", location->uname,
                  dest_id, segment_id, is_new_segment ? "new" : "existing");
 
-    return std::shared_ptr<Segment>(new Segment(
-        location, dest_id, segment_id, segment_size, prefault, address));
+    return std::shared_ptr<Segment>(new Segment(location, dest_id, segment_id,
+                                                segment_size, locked, address));
   }
 
   // Load from pre-warmed address (avoids MmapBuffer call)
   static SegmentPtr loadFromAddress(const revoq::LocationPtr &location,
                                     std::uint32_t dest_id, int segment_id,
-                                    std::uintptr_t address, bool prefault) {
+                                    std::uintptr_t address, bool locked) {
     if (address == 0) {
       throw RevoqError("Cannot load segment from null address");
     }
@@ -253,8 +289,8 @@ public:
     // Ownership passes to this Segment, which unmaps it on destruction. The
     // warmer drops its claim (AppenderWarmer clears slot.is_owned;
     // CursorWarmer zeroes warmer_addr_).
-    return std::shared_ptr<Segment>(new Segment(
-        location, dest_id, segment_id, segment_size, prefault, address));
+    return std::shared_ptr<Segment>(new Segment(location, dest_id, segment_id,
+                                                segment_size, locked, address));
   }
 
   // Compute only: no filesystem access.
@@ -297,7 +333,7 @@ public:
 
     while (left <= right) {
       int mid = left + (right - left) / 2;
-      auto segment = load(location, dest_id, segment_ids[mid], false, false);
+      auto segment = load(location, dest_id, segment_ids[mid], false);
       auto segment_begin_time = segment->beginTime();
       // Skip empty segments (beginTime() returns 0 for empty segments)
       if (segment_begin_time == 0) {
@@ -320,14 +356,15 @@ private:
   const LocationPtr location_;
   const std::uint32_t dest_id_;
   const int segment_id_;
-  const bool prefault_;
+  // The mapping is mlocked; release munlocks it.
+  const bool locked_;
   const std::size_t size_;
   const SegmentHeader *header_;
 
   Segment(const LocationPtr &location, std::uint32_t dest_id, int segment_id,
-          std::size_t size, bool prefault, std::uintptr_t address)
+          std::size_t size, bool locked, std::uintptr_t address)
       : location_(location), dest_id_(dest_id), segment_id_(segment_id),
-        prefault_(prefault), size_(size),
+        locked_(locked), size_(size),
         header_(reinterpret_cast<SegmentHeader *>(address)) {
     // ~Segment() unmaps header_ unconditionally; the factories reject null.
     assert(address != 0);
