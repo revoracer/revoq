@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 RevoRacer
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <filesystem>
 #include <thread>
@@ -53,7 +54,8 @@ public:
   void writeTestData(uint32_t dest_id, int num_messages,
                      int64_t start_time = 0) {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
 
     if (start_time == 0) {
       start_time = revobase::Timestamp::now().nsec();
@@ -77,24 +79,81 @@ public:
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor construction",
                  "[cursor][construct]") {
-  SECTION("Can create cursor with prefault=true") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+  SECTION("Can create cursor with Inline populate") {
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     REQUIRE(cursor != nullptr);
   }
 
-  SECTION("Can create cursor with prefault=false") {
+  SECTION("Can create cursor with Background populate") {
     auto cursor = std::make_shared<MergingCursor>(
-        MergingCursorOptions{.prefault = false});
+        MergingCursorOptions{.populate = SegmentPopulate::Background});
     REQUIRE(cursor != nullptr);
   }
 
   SECTION("New cursor has no streams") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     REQUIRE(cursor->getStreamCount() == 0);
     REQUIRE_FALSE(cursor->isDataAvailable());
   }
+
+  SECTION("Background requires background threads") {
+    REQUIRE_THROWS_AS(MergingCursor(MergingCursorOptions{
+                          .populate = SegmentPopulate::Background,
+                          .background_threads = false}),
+                      std::invalid_argument);
+  }
+
+  SECTION("lock_pages is rejected with Lazy populate") {
+    REQUIRE_THROWS_AS(
+        MergingCursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                           .lock_pages = true}),
+        std::invalid_argument);
+  }
+}
+
+TEST_CASE_METHOD(MergingCursorFixture,
+                 "MergingCursor reads across segment rotations",
+                 "[cursor][rotation]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
+  // 2 MB segments of 64-byte frames hold ~32k frames, so this spans 4.
+  const int NUM_MESSAGES = 100000;
+  writeTestData(0, NUM_MESSAGES);
+  REQUIRE(location->locator->listSegmentId(location, 0).size() >= 3);
+
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
+  cursor.join(location, 0, 0);
+
+  int count = 0;
+  while (cursor.isDataAvailable()) {
+    auto frame = cursor.tryCurrentFrame();
+    // The cursor surfaces each segment's SegmentEnd sentinel; skip it.
+    if (static_cast<MsgType>(frame->getMsgType()) == MsgType::SegmentEnd) {
+      cursor.next();
+      continue;
+    }
+    REQUIRE(frame->data<TestMessage>().id == static_cast<uint32_t>(count));
+    ++count;
+    cursor.next();
+    // The data is already written, so pace the reader to give a Background
+    // warmer time to populate the next segment before each rotation.
+    if (count % 1000 == 0)
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  REQUIRE(count == NUM_MESSAGES);
+
+#ifdef REVOQ_ENABLE_DIAGNOSTICS
+  const auto stats = cursor.getStats();
+  if (populate == SegmentPopulate::Background) {
+    REQUIRE(stats.warmer_signals >= 3);
+    REQUIRE(stats.warmer_hits >= 1);
+  } else {
+    REQUIRE(stats.warmer_signals == 0);
+    REQUIRE(stats.warmer_hits == 0);
+  }
+#endif
 }
 
 // ============================================================================
@@ -103,11 +162,13 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor construction",
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor join/disjoin",
                  "[cursor][join]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   writeTestData(0, 10);
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-  auto cursor =
-      std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+  auto cursor = std::make_shared<MergingCursor>(
+      MergingCursorOptions{.populate = populate});
 
   SECTION("Can join stream") {
     cursor->join(location, 0, 0);
@@ -155,12 +216,14 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor join/disjoin",
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor basic reading",
                  "[cursor][read]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   const int NUM_MESSAGES = 100;
   writeTestData(0, NUM_MESSAGES);
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-  auto cursor =
-      std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+  auto cursor = std::make_shared<MergingCursor>(
+      MergingCursorOptions{.populate = populate});
   cursor->join(location, 0, 0);
 
   SECTION("Can read all messages") {
@@ -215,13 +278,15 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor basic reading",
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
                  "[cursor][merge]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   // Write to 3 different streams with interleaved timestamps
   int64_t base_time = revobase::Timestamp::now().nsec();
 
   // Stream 0: times 0, 3, 6, 9...
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = true});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + i * 3000, static_cast<uint32_t>(i), 0.0};
       publish(*appender, msg.timestamp, kTagA, msg);
@@ -231,7 +296,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
   // Stream 1: times 1, 4, 7, 10...
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 1, AppenderOptions{.prefault = true});
+        location, 1, AppenderOptions{.populate = SegmentPopulate::Inline});
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + 1000 + i * 3000, static_cast<uint32_t>(i),
                       1.0};
@@ -242,7 +307,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
   // Stream 2: times 2, 5, 8, 11...
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 2, AppenderOptions{.prefault = true});
+        location, 2, AppenderOptions{.populate = SegmentPopulate::Inline});
     for (int i = 0; i < 10; ++i) {
       TestMessage msg{base_time + 2000 + i * 3000, static_cast<uint32_t>(i),
                       2.0};
@@ -253,8 +318,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
   SECTION("Merges streams in timestamp order") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, 0);
     cursor->join(location, 1, 0);
     cursor->join(location, 2, 0);
@@ -276,8 +341,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
   }
 
   SECTION("Can identify source stream") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, 0);
     cursor->join(location, 1, 0);
     cursor->join(location, 2, 0);
@@ -309,12 +374,14 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor merges streams",
 // ============================================================================
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor seek", "[cursor][seek]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   int64_t base_time = revobase::Timestamp::now().nsec();
 
   // Write 100 messages with known timestamps
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = true});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
     for (int i = 0; i < 100; ++i) {
       TestMessage msg{base_time + i * 1000, static_cast<uint32_t>(i),
                       100.0 + i};
@@ -325,8 +392,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor seek", "[cursor][seek]") {
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
   SECTION("Can seek to specific time") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, base_time + 50000); // Seek to message 50
 
     if (cursor->isDataAvailable()) {
@@ -337,8 +404,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor seek", "[cursor][seek]") {
   }
 
   SECTION("Can seek during reading") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, 0);
 
     // Read first 20 messages
@@ -367,8 +434,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor performance",
   writeTestData(0, NUM_MESSAGES);
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  auto cursor =
-      std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = false});
+  auto cursor = std::make_shared<MergingCursor>(
+      MergingCursorOptions{.populate = SegmentPopulate::Background});
   cursor->join(location, 0, 0);
 
   SECTION("Reading throughput") {
@@ -404,12 +471,14 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor performance",
 
 TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor edge cases",
                  "[cursor][edge]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   SECTION("Reading empty stream") {
     writeTestData(0, 0); // Empty
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, 0);
 
     REQUIRE_FALSE(cursor->isDataAvailable());
@@ -419,8 +488,8 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor edge cases",
     writeTestData(0, 10);
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
     cursor->join(location, 0, 0);
 
     REQUIRE(cursor->isDataAvailable());
@@ -431,16 +500,16 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor edge cases",
   }
 
   SECTION("next() on empty cursor is safe") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
 
     cursor->next(); // Should not crash
     REQUIRE_FALSE(cursor->isDataAvailable());
   }
 
   SECTION("tryCurrentFrame on empty cursor") {
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = populate});
 
     auto frame = cursor->tryCurrentFrame();
     REQUIRE_FALSE(frame);
@@ -464,7 +533,7 @@ TEST_CASE_METHOD(MergingCursorFixture, "MergingCursor thread safety",
     for (int i = 0; i < 3; ++i) {
       threads.emplace_back([&]() {
         auto cursor = std::make_shared<MergingCursor>(
-            MergingCursorOptions{.prefault = true});
+            MergingCursorOptions{.populate = SegmentPopulate::Inline});
         cursor->join(location, 0, 0);
 
         int count = 0;

@@ -83,9 +83,9 @@ int main() {
     constexpr int messages = 1000;
 
     {
-      Appender<> appender(
-          location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+      Appender<> appender(location, dest_id,
+                          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                          .background_threads = false});
       for (int i = 0; i < messages; ++i) {
         const auto ts = static_cast<std::int64_t>(i + 1);
         if (i % 3 == 0) {
@@ -101,8 +101,8 @@ int main() {
       }
     }
 
-    MergingCursor cursor(
-        MergingCursorOptions{.prefault = false, .background_threads = false});
+    MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                              .background_threads = false});
     cursor.join(location, dest_id, 0);
 
     int handled = 0;

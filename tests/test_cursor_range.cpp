@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 RevoRacer
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -24,13 +25,16 @@ struct RangeTrade {
 
 TEST_CASE("MergingCursor FrameView loop reads one stream",
           "[cursor][frame-view]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 0;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     for (uint32_t i = 0; i < 5; ++i) {
       RangeTrade trade{1'000'000 + static_cast<int64_t>(i * 1000), i,
                        100.0 + i};
@@ -38,7 +42,7 @@ TEST_CASE("MergingCursor FrameView loop reads one stream",
     }
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
 
   std::vector<uint32_t> ids;
@@ -58,12 +62,14 @@ TEST_CASE("MergingCursor FrameView loop reads one stream",
 
 TEST_CASE("MergingCursor FrameView loop preserves merged stream order",
           "[cursor][frame-view]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = true});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
     RangeTrade first{1'000'000, 10, 100.0};
     RangeTrade third{3'000'000, 30, 300.0};
     publish(*appender, first.timestamp, kTagA, first);
@@ -72,12 +78,12 @@ TEST_CASE("MergingCursor FrameView loop preserves merged stream order",
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, 1, AppenderOptions{.prefault = true});
+        location, 1, AppenderOptions{.populate = SegmentPopulate::Inline});
     RangeTrade second{2'000'000, 20, 200.0};
     publish(*appender, second.timestamp, kTagA, second);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, 0, 0);
   cursor.join(location, 1, 0);
 

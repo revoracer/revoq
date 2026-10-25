@@ -20,12 +20,16 @@ def main() -> int:
             name="python-roundtrip",
         )
 
-        appender = revoq.Appender(location, 0, prefault=False, background_threads=False)
+        appender = revoq.Appender(
+            location, 0, populate=revoq.SegmentPopulate.Lazy, background_threads=False
+        )
         for i, payload in enumerate(payloads):
             appender.write(msg_type=msg_type, gen_time=i + 1, data=payload)
         del appender
 
-        cursor = revoq.MergingCursor(prefault=False, background_threads=False)
+        cursor = revoq.MergingCursor(
+            populate=revoq.SegmentPopulate.Lazy, background_threads=False
+        )
         cursor.join(location, 0, 0)
         frames = [frame for frame in cursor if frame.msg_type == msg_type]
 

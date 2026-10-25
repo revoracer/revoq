@@ -87,17 +87,17 @@ int main() {
     constexpr std::uint32_t dest_id = 0;
 
     {
-      Appender<> appender(
-          location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+      Appender<> appender(location, dest_id,
+                          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                          .background_threads = false});
       publish(appender, Trade{1, 101, 100.25});
       publish(appender, Bbo{2, 500, 700});
       appender.mark(3, BookReset::kMsgType);
       publish(appender, Trade{4, 101, 100.50});
     }
 
-    MergingCursor cursor(
-        MergingCursorOptions{.prefault = false, .background_threads = false});
+    MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                              .background_threads = false});
     cursor.join(location, dest_id, 0);
 
     int trades = 0;

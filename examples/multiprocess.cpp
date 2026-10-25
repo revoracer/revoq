@@ -117,9 +117,9 @@ int main(int argc, char **argv) {
                                    "multiprocess", locator);
     constexpr std::uint32_t dest_id = 0;
 
-    Appender<> appender(
-        location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+    Appender<> appender(location, dest_id,
+                        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                        .background_threads = false});
 
     int ready_pipe[2] = {-1, -1};
     if (pipe(ready_pipe) != 0)
@@ -132,8 +132,8 @@ int main(int argc, char **argv) {
     if (pid == 0) {
       close(ready_pipe[0]);
 
-      MergingCursor cursor(
-          MergingCursorOptions{.prefault = false, .background_threads = false});
+      MergingCursor cursor(MergingCursorOptions{
+          .populate = SegmentPopulate::Lazy, .background_threads = false});
       cursor.join(location, dest_id, 0);
       writeSignal(ready_pipe[1]);
       close(ready_pipe[1]);

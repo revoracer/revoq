@@ -24,7 +24,7 @@ def write_frames(location, dest_id, n):
 
 
 def read_frames(location, dest_id):
-    r = revoq.MergingCursor(prefault=True, background_threads=False)
+    r = revoq.MergingCursor(populate=revoq.SegmentPopulate.Lazy, background_threads=False)
     r.join(location, dest_id, 0)
     return [f for f in r if f.msg_type == MSG_TYPE]
 
@@ -53,7 +53,7 @@ def test_memoryview_is_zero_copy(tmp_journal):
     w.write(msg_type=MSG_TYPE, gen_time=1, data=payload)
     del w
 
-    r = revoq.MergingCursor(prefault=True, background_threads=False)
+    r = revoq.MergingCursor(populate=revoq.SegmentPopulate.Lazy, background_threads=False)
     r.join(location, dest_id, 0)
     frame = next(iter(r))
 
@@ -74,7 +74,7 @@ def test_numpy_from_memoryview(tmp_journal):
         w.write(msg_type=MSG_TYPE, gen_time=1, data=struct.pack("<d", v))
     del w
 
-    r = revoq.MergingCursor(prefault=True, background_threads=False)
+    r = revoq.MergingCursor(populate=revoq.SegmentPopulate.Lazy, background_threads=False)
     r.join(location, dest_id, 0)
     for i, frame in enumerate(r):
         if frame.msg_type != MSG_TYPE:
@@ -89,13 +89,16 @@ def test_sequence_contiguous_across_segments(tmp_journal):
     # DEFAULT segment (executiondata + dest_id=1 → 4MB) with 64B frames:
     # frames/segment ≈ 65,534.  Write 70,000 to force 1 rotation.
     n = 70_000
-    w = revoq.Appender(location, dest_id, background_threads=False)
+    w = revoq.Appender(location, dest_id,
+                       populate=revoq.SegmentPopulate.Inline,
+                       background_threads=False)
     payload = struct.pack("<Q", 0)
     for i in range(n):
         w.write(msg_type=MSG_TYPE, gen_time=i + 1, data=payload)
     del w
 
-    r = revoq.MergingCursor(prefault=True, background_threads=False)
+    r = revoq.MergingCursor(populate=revoq.SegmentPopulate.Inline,
+                            background_threads=False)
     r.join(location, dest_id, 0)
 
     prev_seq = -1

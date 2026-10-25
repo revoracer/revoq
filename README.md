@@ -122,13 +122,15 @@ auto location = Location::make(Mode::LIVE, Category::EXECUTION, "examples", "dem
 
 // writer: fill the slot, then publish
 Appender<> writer(location, /*dest_id=*/0,
-    AppenderOptions{.prefault = false, .background_threads = false});
+    AppenderOptions{.populate = SegmentPopulate::Lazy,
+                    .background_threads = false});
 auto &slot = writer.openData<Trade>(/*gen_time=*/1, MsgType::Trade);
 slot = Trade{1, 101, 100.25, 10};
 writer.closeData<Trade>();
 
 // reader: walk committed frames
-MergingCursor reader(MergingCursorOptions{.prefault = false, .background_threads = false});
+MergingCursor reader(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                          .background_threads = false});
 reader.join(location, /*dest_id=*/0, 0);
 while (const auto frame = reader.tryCurrentFrame()) {
   if (static_cast<MsgType>(frame.msg_type) == MsgType::Trade)
@@ -144,14 +146,34 @@ import revoq, struct
 location = revoq.make_location(path, mode="live", category="executiondata",
                                group="examples", name="demo")
 
-writer = revoq.Appender(location, 0, prefault=False, background_threads=False)
+writer = revoq.Appender(location, 0, populate=revoq.SegmentPopulate.Lazy,
+                        background_threads=False)
 writer.write(msg_type=100, gen_time=1, data=struct.pack("<Qd", 1, 100.0))
 del writer
 
-reader = revoq.MergingCursor(prefault=False, background_threads=False)
+reader = revoq.MergingCursor(populate=revoq.SegmentPopulate.Lazy,
+                             background_threads=False)
 reader.join(location, 0, 0)
 frames = [f for f in reader if f.msg_type == 100]
 ```
+
+### Segment population
+
+Segments are memory-mapped files. `populate` (on both `AppenderOptions` and
+`MergingCursorOptions`) decides who pays the page faults:
+
+| `SegmentPopulate` | What happens | Hot path cost |
+| --- | --- | --- |
+| `Background` (default) | A warmer thread maps and populates the next segment ahead of rotation. Needs `background_threads`. | No stall and no faults, as long as the warmer keeps up. |
+| `Inline` | The whole segment is populated when it is mapped, on the thread that rotates. | One stall at rotation, then no faults. |
+| `Lazy` | Map only. | One soft fault on first touch of each page. |
+
+`lock_pages` additionally `mlock`s segments so they stay resident (needs
+`ulimit -l`; not allowed with `Lazy`). Under `Background` the warmer pays the
+populate and lock cost; a segment it has not delivered yet is mapped `Lazy`.
+
+The examples above use `Lazy` with `background_threads = false` so they start
+no threads, which also keeps them `fork()`-safe.
 
 Runnable versions live in [`examples/`](examples). Each C++ example exits nonzero
 on failure and prints an `ok ...` line on success.

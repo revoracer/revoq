@@ -75,16 +75,16 @@ int main() {
     constexpr std::uint32_t dest_id = 0;
 
     {
-      Appender<> appender(
-          location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+      Appender<> appender(location, dest_id,
+                          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                          .background_threads = false});
       publish(appender, 1, ExampleMsgType::Trade, Trade{1, 101, 100.25, 10});
       publish(appender, 2, ExampleMsgType::Trade, Trade{2, 101, 100.50, 20});
       publish(appender, 3, ExampleMsgType::Trade, Trade{3, 101, 100.75, 30});
     }
 
-    MergingCursor cursor(
-        MergingCursorOptions{.prefault = false, .background_threads = false});
+    MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                              .background_threads = false});
     cursor.join(location, dest_id, 0);
 
     int count = 0;

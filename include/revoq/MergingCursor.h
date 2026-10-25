@@ -18,7 +18,11 @@
 namespace revoq {
 
 struct MergingCursorOptions {
-  bool prefault;
+  // When segment pages get established; see SegmentPopulate.
+  SegmentPopulate populate = SegmentPopulate::Background;
+  // mlock segments while mapped. Not with Lazy.
+  bool lock_pages = false;
+  // Background requires these (warmer and retire threads).
   bool background_threads = true;
   size_t retained_segment_limit = 0;
   int warmer_timeout_ms = 5000;
@@ -56,13 +60,15 @@ public:
   };
 
   explicit MergingCursor(MergingCursorOptions options)
-      : prefault_(options.prefault),
+      : populate_(options.populate), lock_pages_(options.lock_pages),
         background_threads_(options.background_threads),
         retained_segment_limit_(options.retained_segment_limit),
         warmer_timeout_ms_(options.warmer_timeout_ms),
         warmer_cpu_(options.warmer_cpu), retire_cpu_(options.retire_cpu),
         current_stream_idx_(static_cast<size_t>(-1)), needs_rebuild_(true),
-        use_heap_(true) {}
+        use_heap_(true) {
+    validateSegmentPopulate(populate_, lock_pages_, background_threads_);
+  }
 
   ~MergingCursor() { streams_.clear(); }
 
@@ -79,7 +85,8 @@ public:
         location, dest_id,
         StreamOptions{
             .is_writing = false,
-            .prefault = prefault_,
+            .populate = populate_,
+            .lock_pages = lock_pages_,
             .background_threads = background_threads_,
             .retained_segment_limit = retained_segment_limit_,
             .warmer_timeout_ms = warmer_timeout_ms_,
@@ -408,7 +415,8 @@ private:
     return (static_cast<uint64_t>(location_uid) << 32) | dest_id;
   }
 
-  const bool prefault_;
+  const SegmentPopulate populate_;
+  const bool lock_pages_;
   const bool background_threads_;
   const size_t retained_segment_limit_;
   const int warmer_timeout_ms_;

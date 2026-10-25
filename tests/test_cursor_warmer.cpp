@@ -8,6 +8,7 @@
 // via the warmer's own running_ flag rather than Stream's retire_running_.
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <cstdint>
 #include <thread>
@@ -69,6 +70,34 @@ TEST_CASE_METHOD(WarmerFixture,
 
   warmer.stop();
 }
+
+#ifdef __linux__
+TEST_CASE_METHOD(WarmerFixture, "CursorWarmer locks warmed segments on request",
+                 "[cursor][warmer]") {
+  const uint32_t dest_id = 0x1001;
+  writeFillerSegment(location, dest_id);
+  const uint32_t segment_size = findSegmentSize(location, dest_id);
+  const bool lock_pages = GENERATE(false, true);
+
+  const std::size_t before = lockedKb();
+  CursorWarmer warmer(location, dest_id, segment_size,
+                      /*warmer_timeout_ms=*/2000, lock_pages);
+  warmer.start(-1);
+  warmer.signalNext(1);
+
+  SegmentPtr segment = claimWithin(warmer, 1, 5s);
+  REQUIRE(segment != nullptr);
+  if (lock_pages)
+    REQUIRE(lockedKb() >= before + segment_size / 1024);
+  else
+    REQUIRE(lockedKb() == before);
+
+  // Releasing the segment drops the lock.
+  segment.reset();
+  REQUIRE(lockedKb() == before);
+  warmer.stop();
+}
+#endif
 
 TEST_CASE_METHOD(WarmerFixture, "CursorWarmer stop() preempts a pending warm",
                  "[cursor][warmer]") {

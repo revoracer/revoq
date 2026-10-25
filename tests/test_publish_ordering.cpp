@@ -69,9 +69,9 @@ TEST_CASE_METHOD(OrderingFixture, "Frame publish ordering", "[ordering]") {
     // loop.
     constexpr uint64_t N = 10'000;
 
-    Appender<> appender(
-        location, 0,
-        AppenderOptions{.prefault = false, .background_threads = false});
+    Appender<> appender(location, 0,
+                        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                        .background_threads = false});
 
     std::atomic<int> torn_frames{0};
     std::atomic<bool> cursor_ready{false};
@@ -80,8 +80,8 @@ TEST_CASE_METHOD(OrderingFixture, "Frame publish ordering", "[ordering]") {
       // No background threads: cursor is single-threaded, isolated to this
       // thread. background_threads=false avoids any warmer/retire concurrency
       // that could obscure a real ordering bug.
-      MergingCursor cursor(
-          MergingCursorOptions{.prefault = false, .background_threads = false});
+      MergingCursor cursor(MergingCursorOptions{
+          .populate = SegmentPopulate::Lazy, .background_threads = false});
       cursor.join(location, 0, 0);
 
       // Signal appender: cursor is positioned at frame 0 of segment 1.

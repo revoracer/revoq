@@ -32,7 +32,9 @@ namespace revoq {
 
 struct StreamOptions {
   bool is_writing;
-  bool prefault;
+  SegmentPopulate populate = SegmentPopulate::Background;
+  // mlock segments while mapped. Not with Lazy.
+  bool lock_pages = false;
   bool background_threads = true;
   size_t retained_segment_limit = 0;
   int warmer_timeout_ms = 5000;
@@ -47,7 +49,8 @@ public:
   Stream(revoq::LocationPtr location, std::uint32_t dest_id,
          StreamOptions options)
       : location_(std::move(location)), dest_id_(dest_id),
-        is_writing_(options.is_writing), prefault_(options.prefault),
+        is_writing_(options.is_writing), populate_(options.populate),
+        lock_pages_(options.lock_pages),
         background_threads_(options.background_threads),
         max_retained_segments_(options.retained_segment_limit),
         warmer_timeout_ms_(options.warmer_timeout_ms),
@@ -55,6 +58,7 @@ public:
         stream_dir_(location_->locator->layoutDir(location_, Layout::STREAM)),
         segment_size_(findSegmentSize(location_, dest_id_)),
         frame_(std::shared_ptr<Frame>(new Frame())), segment_frame_nb_(0) {
+    validateSegmentPopulate(populate_, lock_pages_, background_threads_);
     if (!background_threads_)
       return;
 
@@ -73,9 +77,9 @@ public:
     // cursor hot path incurs zero page faults at rotation time. start() creates
     // the thread and pins it immediately from this thread, which is critical
     // for avoiding missed rotations.
-    if (!prefault_) {
+    if (populate_ == SegmentPopulate::Background) {
       warmer_ = std::make_unique<CursorWarmer>(
-          location_, dest_id_, segment_size_, warmer_timeout_ms_);
+          location_, dest_id_, segment_size_, warmer_timeout_ms_, lock_pages_);
       warmer_->start(warmer_cpu_);
     }
   }
@@ -120,8 +124,8 @@ public:
     s.slow_load_max_ns = stat_slow_load_max_ns_.load(std::memory_order_relaxed);
     s.retire_max_ns = stat_retire_max_ns_.load(std::memory_order_relaxed);
 
-    // Warmer-owned counters (empty when no warmer, i.e. prefault or no
-    // background threads — matching the pre-extraction all-zero state).
+    // Warmer-owned counters (empty when no warmer, i.e. populate is not
+    // Background — matching the pre-extraction all-zero state).
     if (warmer_) {
       const CursorWarmerStats w = warmer_->getStats();
 #define X(f) s.f = w.f;
@@ -186,7 +190,8 @@ private:
   const revoq::LocationPtr location_;
   const std::uint32_t dest_id_;
   const bool is_writing_;
-  const bool prefault_;
+  const SegmentPopulate populate_;
+  const bool lock_pages_;
   const bool background_threads_;
   const size_t max_retained_segments_;
   const int warmer_timeout_ms_;
@@ -207,7 +212,7 @@ private:
   std::thread retire_thread_;
 
   // Cursor warmer: owns its thread, single-slot handoff state, and warmer
-  // diagnostics. Null when prefault or background threads are disabled.
+  // diagnostics. Null unless populate is Background.
   CursorWarmerPtr warmer_;
 
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
@@ -285,7 +290,10 @@ private:
       // and records hit/invalid/miss diagnostics; returns null on a miss.
       if (warmer_)
         new_segment = warmer_->tryLoadWarmedSegment(segment_id);
-      // Slow path: no-prefault mmap, soft page faults on first access per 4 KB.
+      // Slow path: the warmer had nothing ready, so map the segment on this thread.
+      // Inline populates it all now (one stall, then no faults). Lazy, and a
+      // Background warmer miss, map without populating: each page soft-faults on
+      // first access instead.
       if (!new_segment) {
         if (!is_writing_ && !segmentFileExists(segment_id)) {
           clearCurrentSegment();
@@ -295,8 +303,9 @@ private:
         stat_slow_loads_.fetch_add(1, std::memory_order_relaxed);
         const uint64_t slow_t0 = nowNs();
 #endif
-        new_segment = Segment::load(location_, dest_id_, segment_id,
-                                    is_writing_, prefault_);
+        new_segment =
+            Segment::load(location_, dest_id_, segment_id, is_writing_,
+                          segmentMapOptions(populate_, lock_pages_));
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         const uint64_t slow_dt = nowNs() - slow_t0;
         recordMax(stat_slow_load_max_ns_, slow_dt);

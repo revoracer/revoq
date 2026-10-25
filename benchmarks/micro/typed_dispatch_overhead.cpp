@@ -121,9 +121,9 @@ void publish(Appender<> &appender, std::int64_t timestamp, BenchMsgType msg_type
 }
 
 void writeStream(const LocationPtr &location, std::uint64_t messages) {
-  Appender<> appender(
-      location, kDestId,
-      AppenderOptions{.prefault = false, .background_threads = false});
+  Appender<> appender(location, kDestId,
+                      AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                      .background_threads = false});
 
   for (std::uint64_t i = 0; i < messages; ++i) {
     const auto ts = static_cast<std::int64_t>(i + 1);
@@ -155,8 +155,8 @@ struct Result {
 };
 
 MergingCursor makeCursor(const LocationPtr &location) {
-  MergingCursor cursor(
-      MergingCursorOptions{.prefault = false, .background_threads = false});
+  MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                            .background_threads = false});
   cursor.join(location, kDestId, 0);
   return cursor;
 }

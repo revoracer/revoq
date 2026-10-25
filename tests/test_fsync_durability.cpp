@@ -36,11 +36,11 @@ TEST_CASE("Async fsync durability", "[durability]") {
     constexpr uint32_t DEST_ID = 0;
 
     // appender: background_threads=false so fork() is safe (no live threads).
-    // prefault=false: no mlock, no msync on segment release — data lives only
-    // in the kernel page cache when the child calls _exit().
-    Appender<> appender(
-        location, DEST_ID,
-        AppenderOptions{.prefault = false, .background_threads = false});
+    // The child exits via _exit(), skipping every Segment destructor, so no
+    // msync ever runs: data lives only in the kernel page cache.
+    Appender<> appender(location, DEST_ID,
+                        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                        .background_threads = false});
 
     const pid_t pid = fork();
     REQUIRE(pid >= 0);
@@ -63,8 +63,8 @@ TEST_CASE("Async fsync durability", "[durability]") {
     REQUIRE(WEXITSTATUS(status) == 0);
 
     // Fresh cursor: new mmap of the same files — reads through page cache.
-    auto cursor = std::make_shared<MergingCursor>(
-        MergingCursorOptions{.prefault = true, .background_threads = false});
+    auto cursor = std::make_shared<MergingCursor>(MergingCursorOptions{
+        .populate = SegmentPopulate::Lazy, .background_threads = false});
     cursor->join(location, DEST_ID, 0);
 
     int64_t prev_seq = -1;

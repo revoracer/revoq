@@ -44,13 +44,19 @@ inline constexpr size_t DEFAULT_STREAM_APPENDER_RETAINED_SEGMENTS = 10;
 inline constexpr size_t kAppenderWarmerRingSize = 16;
 
 struct AppenderOptions {
-  bool prefault = true;
-  size_t warmup_segments = 0;
+  // When segment pages get established; see SegmentPopulate.
+  SegmentPopulate populate = SegmentPopulate::Background;
+  // mlock segments while mapped. Not with Lazy.
+  bool lock_pages = false;
+  // Background only: how many segments ahead the warmer keeps ready
+  // (1..kAppenderWarmerRingSize).
+  size_t warmup_segments = 1;
   int warmer_cpu_core = -1;
   // Retire timed-polls, so it belongs on a housekeeping core (-1 => the
   // housekeeping fallback in CpuAffinity::pinThreadOrHousekeeping). Distinct
   // from the busy-poll warmer's dedicated core (warmer_cpu_core).
   int retire_cpu = -1;
+  // Background requires these (warmer and retire threads).
   bool background_threads = true;
   size_t retained_segment_limit = DEFAULT_STREAM_APPENDER_RETAINED_SEGMENTS;
 };
@@ -81,11 +87,19 @@ template <typename AppenderPolicy = SingleAppenderPolicy> class Appender {
 public:
   Appender(LocationPtr location, uint32_t dest_id, AppenderOptions options = {})
       : location_(std::move(location)), dest_id_(dest_id),
-        prefault_(options.prefault),
+        populate_(options.populate), lock_pages_(options.lock_pages),
         background_threads_(options.background_threads),
         max_retained_segments_(options.retained_segment_limit),
         segment_size_(findSegmentSize(location_, dest_id_)), writing_(false),
         current_sequence_(0), current_segment_id_(0) {
+    validateSegmentPopulate(populate_, lock_pages_, background_threads_);
+    if (populate_ == SegmentPopulate::Background &&
+        (options.warmup_segments == 0 ||
+         options.warmup_segments > kAppenderWarmerRingSize)) {
+      throw std::invalid_argument(
+          "warmup_segments must be within the appender segment warmer ring "
+          "size");
+    }
     // 0 means no written segment found
     const auto last_segment_id = findLastWrittenSegment();
     if (last_segment_id > 0) {
@@ -95,15 +109,11 @@ public:
     }
     if (!current_segment_)
       loadInitialSegment();
-    if (options.warmup_segments > 0) {
-      if (options.warmup_segments > kAppenderWarmerRingSize) {
-        throw std::invalid_argument(
-            "warmup_segments exceeds appender segment warmer ring size");
-      }
+    if (populate_ == SegmentPopulate::Background) {
       appender_warmer_ =
           std::make_shared<AppenderWarmer<kAppenderWarmerRingSize>>(
               location_, dest_id_, segment_size_, true, options.warmer_cpu_core,
-              options.warmup_segments);
+              options.warmup_segments, lock_pages_);
       appender_warmer_->start();
       appender_warmer_->updateCurrentSegment(
           current_segment_id_.load(std::memory_order_relaxed));
@@ -255,7 +265,8 @@ public:
 private:
   const LocationPtr location_;
   const uint32_t dest_id_;
-  const bool prefault_;
+  const SegmentPopulate populate_;
+  const bool lock_pages_;
   const bool background_threads_;
   const size_t max_retained_segments_;
   const uint32_t segment_size_;
@@ -386,10 +397,9 @@ private:
       const int segment_id = *it;
       try {
         // this is for metadata scanning during appender construction
-        // so we use prefault=false to map lazily and try not to mlock old
-        // segments
+        // so we map lazily and do not mlock old segments
         SegmentPtr segment =
-            Segment::load(location_, dest_id_, segment_id, false, false);
+            Segment::load(location_, dest_id_, segment_id, false);
         uintptr_t last_frame_pos = segment->header_->last_frame_position;
         SPDLOG_INFO("Segment {} last_frame_position: {}", segment_id,
                     last_frame_pos);
@@ -405,11 +415,19 @@ private:
     return 0;
   }
 
+  // The starting segment is mapped at construction, off the hot path, and the
+  // warmer only warms segments after it, so Background populates it here too.
+  [[nodiscard]] revobase::os::MmapLoadOptions constructionMapOptions() const {
+    if (populate_ == SegmentPopulate::Lazy)
+      return {};
+    return {.populate = true, .lock_pages = lock_pages_};
+  }
+
   void loadInitialSegment() {
     int new_segment_id =
         current_segment_id_.fetch_add(1, std::memory_order_relaxed) + 1;
-    current_segment_ =
-        Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
+    current_segment_ = Segment::load(location_, dest_id_, new_segment_id, true,
+                                     constructionMapOptions());
     current_frame_address_ = current_segment_->firstFrameAddress();
     SPDLOG_DEBUG("Loaded initial segment {} at sequence {}", new_segment_id,
                  current_sequence_.load());
@@ -418,8 +436,8 @@ private:
   void resumeFromSegment(int segment_id) {
     current_segment_id_.store(segment_id, std::memory_order_relaxed);
     try {
-      SegmentPtr segment =
-          Segment::load(location_, dest_id_, segment_id, true, prefault_);
+      SegmentPtr segment = Segment::load(location_, dest_id_, segment_id, true,
+                                         constructionMapOptions());
       FrameHeader *last = lastCommittedFrame(*segment);
       if (!last) {
         SPDLOG_WARN("Resume segment {} has no committed frame", segment_id);
@@ -475,15 +493,15 @@ private:
         stat_warmer_hits_.fetch_add(1, std::memory_order_relaxed);
 #endif
         next_segment = Segment::loadFromAddress(
-            location_, dest_id_, new_segment_id, warmed_addr, prefault_);
+            location_, dest_id_, new_segment_id, warmed_addr, lock_pages_);
         SPDLOG_TRACE("Using pre-warmed segment {}", new_segment_id);
       } else {
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         stat_warmer_misses_.fetch_add(1, std::memory_order_relaxed);
         const uint64_t load_t0 = static_cast<uint64_t>(revobase::Timestamp::now().nsec());
 #endif
-        next_segment =
-            Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
+        next_segment = Segment::load(location_, dest_id_, new_segment_id, true,
+                                     segmentMapOptions(populate_, lock_pages_));
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         const uint64_t load_dt =
             static_cast<uint64_t>(revobase::Timestamp::now().nsec()) - load_t0;
@@ -493,8 +511,8 @@ private:
       }
     } else {
       SPDLOG_INFO("No warmer - load segment normally");
-      next_segment =
-          Segment::load(location_, dest_id_, new_segment_id, true, prefault_);
+      next_segment = Segment::load(location_, dest_id_, new_segment_id, true,
+                                   segmentMapOptions(populate_, lock_pages_));
     }
 
     if (current_segment_) {

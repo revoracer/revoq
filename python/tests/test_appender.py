@@ -48,7 +48,7 @@ def test_appender_exposes_warmer_and_cpu_options(tmp_journal):
     w = revoq.Appender(
         location,
         dest_id,
-        prefault=False,
+        populate=revoq.SegmentPopulate.Background,
         background_threads=True,
         warmup_segments=1,
         warmer_cpu_core=-1,
@@ -61,8 +61,14 @@ def test_appender_exposes_warmer_and_cpu_options(tmp_journal):
 
 def test_appender_rejects_too_many_warmup_segments(tmp_journal):
     _, location, dest_id = tmp_journal
-    with pytest.raises(ValueError, match="warmup_segments exceeds"):
+    with pytest.raises(ValueError, match="warmup_segments must be within"):
         revoq.Appender(location, dest_id, warmup_segments=17)
+
+
+def test_appender_background_requires_background_threads(tmp_journal):
+    _, location, dest_id = tmp_journal
+    with pytest.raises(ValueError, match="requires background_threads"):
+        revoq.Appender(location, dest_id, background_threads=False)
 
 
 def test_make_location_unknown_mode(tmp_path):

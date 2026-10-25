@@ -131,21 +131,34 @@ Args:
           },
           "Payload as a memoryview (zero-copy into the snapshot buffer).");
 
+  py::enum_<SegmentPopulate>(m, "SegmentPopulate",
+                             "When segment pages get established.")
+      .value("Lazy", SegmentPopulate::Lazy,
+             "Map only; first touch of each page faults.")
+      .value("Inline", SegmentPopulate::Inline,
+             "Populate the whole segment when it is mapped, at rotation.")
+      .value("Background", SegmentPopulate::Background,
+             "A warmer thread populates upcoming segments ahead of rotation. "
+             "Requires background_threads.");
+
   // ── MergingCursor ─────────────────────────────────────────────────────────
   py::class_<MergingCursor>(m, "MergingCursor")
-      .def(py::init([](bool prefault, bool background_threads,
+      .def(py::init([](SegmentPopulate populate, bool lock_pages,
+                       bool background_threads,
                        std::size_t retained_segment_limit,
                        int warmer_timeout_ms, int warmer_cpu, int retire_cpu) {
              return std::make_unique<MergingCursor>(MergingCursorOptions{
-                 .prefault = prefault,
+                 .populate = populate,
+                 .lock_pages = lock_pages,
                  .background_threads = background_threads,
                  .retained_segment_limit = retained_segment_limit,
                  .warmer_timeout_ms = warmer_timeout_ms,
                  .warmer_cpu = warmer_cpu,
                  .retire_cpu = retire_cpu});
            }),
-           py::arg("prefault") = false, py::arg("background_threads") = true,
-           py::kw_only(), py::arg("retained_segment_limit") = 0,
+           py::kw_only(), py::arg("populate") = SegmentPopulate::Background,
+           py::arg("lock_pages") = false, py::arg("background_threads") = true,
+           py::arg("retained_segment_limit") = 0,
            py::arg("warmer_timeout_ms") = 5000, py::arg("warmer_cpu") = -1,
            py::arg("retire_cpu") = -1)
       .def("join", &MergingCursor::join, py::arg("location"),
@@ -205,13 +218,15 @@ Args:
 
   // ── Appender ─────────────────────────────────────────────────────────
   py::class_<Appender<>>(m, "Appender")
-      .def(py::init([](LocationPtr location, uint32_t dest_id, bool prefault,
+      .def(py::init([](LocationPtr location, uint32_t dest_id,
+                       SegmentPopulate populate, bool lock_pages,
                        bool background_threads, std::size_t warmup_segments,
                        int warmer_cpu_core, int retire_cpu,
                        std::size_t retained_segment_limit) {
              return std::make_unique<Appender<>>(
                  std::move(location), dest_id,
-                 AppenderOptions{.prefault = prefault,
+                 AppenderOptions{.populate = populate,
+                                 .lock_pages = lock_pages,
                                  .warmup_segments = warmup_segments,
                                  .warmer_cpu_core = warmer_cpu_core,
                                  .retire_cpu = retire_cpu,
@@ -219,9 +234,10 @@ Args:
                                  .retained_segment_limit =
                                      retained_segment_limit});
            }),
-           py::arg("location"), py::arg("dest_id"), py::arg("prefault") = false,
-           py::arg("background_threads") = true, py::kw_only(),
-           py::arg("warmup_segments") = 0, py::arg("warmer_cpu_core") = -1,
+           py::arg("location"), py::arg("dest_id"), py::kw_only(),
+           py::arg("populate") = SegmentPopulate::Background,
+           py::arg("lock_pages") = false, py::arg("background_threads") = true,
+           py::arg("warmup_segments") = 1, py::arg("warmer_cpu_core") = -1,
            py::arg("retire_cpu") = -1,
            py::arg("retained_segment_limit") =
                DEFAULT_STREAM_APPENDER_RETAINED_SEGMENTS)

@@ -49,10 +49,10 @@ public:
 
   AppenderWarmer(LocationPtr location, uint32_t dest_id, size_t segment_size,
                  bool is_appender, int warmer_cpu_core = -1,
-                 size_t warmup_distance = 1)
+                 size_t warmup_distance = 1, bool lock_pages = false)
       : location_(std::move(location)), dest_id_(dest_id),
         segment_size_(segment_size), is_appender_(is_appender),
-        warmer_cpu_core_(warmer_cpu_core),
+        lock_pages_(lock_pages), warmer_cpu_core_(warmer_cpu_core),
         warmup_distance_(std::min(warmup_distance, RingSize / 2)),
         running_(false), write_index_(0), read_index_(0), current_segment_(-1) {
     SPDLOG_INFO("AppenderWarmer created for {}/{:08x} ({}) - ring size: {}",
@@ -164,6 +164,8 @@ private:
   const uint32_t dest_id_;
   const size_t segment_size_;
   const bool is_appender_;
+  // mlock warmed segments (in this thread, off the appender hot path).
+  const bool lock_pages_;
   const int warmer_cpu_core_;
   const size_t warmup_distance_;
   // A dedicated core opts this warmer into the busy-poll + SCHED_FIFO hot path.
@@ -196,8 +198,9 @@ private:
     for (size_t i = 0; i < RingSize; ++i) {
       SegmentSlot &slot = ring_[i];
       if (slot.is_owned && slot.address != 0) {
-        revobase::os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
-                                          revobase::os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            slot.address, slot.size, lock_pages_,
+            revobase::os::MsyncMode::NONE);
         slot.address = 0;
         slot.is_owned = false;
       }
@@ -351,14 +354,15 @@ private:
     try {
       addr = revobase::os::MmapBuffer::loadMmapBuffer(
           segment_file, segment_size_,
-          is_appender_, // true for appender, false for cursor
-          true,         // prefault=true: pre-fault all segments NOW!
-          // zero_new_file=false: the warmer does NOT own this segment yet. We
-          // only settle ownership below via the current_segment_ re-check, and
-          // do our own (guarded) zeroing after it. Letting loadMmapBuffer bulk-
-          // memset a just-created file here would run BEFORE that check and
-          // could clobber a writer that fell back onto this same segment.
-          false);
+          is_appender_,      // true for appender, false for cursor
+          {.populate = true, // fault the whole segment in NOW, off the hot path
+           .lock_pages = lock_pages_,
+           // zero_new_file=false: the warmer does NOT own this segment yet. We
+           // only settle ownership below via the current_segment_ re-check,
+           // and do our own (guarded) zeroing after it. Letting loadMmapBuffer
+           // bulk-memset a just-created file here would run BEFORE that check
+           // and could clobber a writer that fell back onto this same segment.
+           .zero_new_file = false});
     } catch (...) {
       if (is_appender_) {
         std::error_code ec;
@@ -375,7 +379,7 @@ private:
     // - MAP_POPULATE: pre-faults all segments
     // - MADV_HUGEPAGE: requests transparent huge page promotion
     // - hugetlbfs-backed files: use huge pages from the filesystem
-    // - mlock: locks segments in RAM
+    // - mlock: locks segments in RAM, when lock_pages_
     // - Segment touching: reads (and writes for new files)
     //
     // For appender: Opens file with O_RDWR, mmaps with PROT_READ|PROT_WRITE
@@ -394,8 +398,8 @@ private:
       // This is an expected saturation outcome, not a failure: unmap and return
       // false so the caller drops the slot quietly (no error log).
       if (segment_id <= current_segment_.load(std::memory_order_acquire)) {
-        revobase::os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
-                                          revobase::os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            addr, segment_size_, lock_pages_, revobase::os::MsyncMode::NONE);
         return false;
       }
       auto *header = reinterpret_cast<SegmentHeader *>(addr);
@@ -413,8 +417,8 @@ private:
       } else if (header->version != SEGMENT_VERSION ||
                  header->segment_header_length != sizeof(SegmentHeader) ||
                  header->segment_size != static_cast<uint32_t>(segment_size_)) {
-        revobase::os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, true,
-                                          revobase::os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            addr, segment_size_, lock_pages_, revobase::os::MsyncMode::NONE);
         throw std::runtime_error(
             "existing warmed segment has invalid header: " + segment_file);
       }
@@ -474,8 +478,9 @@ private:
                 slot_segment_id, -1, std::memory_order_acq_rel)) {
           // Release the file-backed mmap
           if (slot.is_owned && slot.address != 0) {
-            revobase::os::MmapBuffer::releaseMmapBuffer(slot.address, slot.size, false,
-                                              revobase::os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                slot.address, slot.size, lock_pages_,
+                revobase::os::MsyncMode::NONE);
             slot.address = 0;
             slot.is_owned = false;
           }

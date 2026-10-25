@@ -30,17 +30,17 @@ struct HpMsg {
 void write_and_verify(const LocationPtr &location, uint32_t dest_id,
                       int n_frames) {
   {
-    Appender<> appender(
-        location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+    Appender<> appender(location, dest_id,
+                        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                        .background_threads = false});
     for (int i = 0; i < n_frames; ++i) {
       HpMsg msg{static_cast<uint64_t>(i)};
       publish(appender, static_cast<int64_t>(i + 1), kTagA, msg);
     }
   }
 
-  auto cursor = std::make_shared<MergingCursor>(
-      MergingCursorOptions{.prefault = false, .background_threads = false});
+  auto cursor = std::make_shared<MergingCursor>(MergingCursorOptions{
+      .populate = SegmentPopulate::Lazy, .background_threads = false});
   cursor->join(location, dest_id, 0);
   int count = 0;
   while (cursor->isDataAvailable()) {

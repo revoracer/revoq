@@ -90,26 +90,53 @@ public:
 
 TEST_CASE_METHOD(AppenderFixture, "Appender construction",
                  "[appender][construct]") {
-  SECTION("Can create appender with prefault=true") {
+  SECTION("Can create appender with Inline populate") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = true});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
     REQUIRE(appender != nullptr);
   }
 
-  SECTION("Can create appender with prefault=false") {
+  SECTION("Can create appender with Lazy populate") {
     auto appender = std::make_shared<Appender<>>(
-        location, 1, AppenderOptions{.prefault = false});
+        location, 1, AppenderOptions{.populate = SegmentPopulate::Lazy});
     REQUIRE(appender != nullptr);
   }
 
   SECTION("Can create appender with AppenderWarmer") {
-    auto appender = std::make_shared<Appender<>>(location, 2,
-                                                 AppenderOptions{
-                                                     .prefault = false,
-                                                     .warmup_segments = 2,
-                                                     .warmer_cpu_core = -1,
-                                                 });
+    auto appender = std::make_shared<Appender<>>(
+        location, 2,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 2,
+            .warmer_cpu_core = -1,
+        });
     REQUIRE(appender != nullptr);
+  }
+
+  SECTION("Background requires background threads") {
+    REQUIRE_THROWS_AS(
+        std::make_shared<Appender<>>(
+            location, 3,
+            AppenderOptions{.populate = SegmentPopulate::Background,
+                            .background_threads = false}),
+        std::invalid_argument);
+  }
+
+  SECTION("Background requires a warmup distance") {
+    REQUIRE_THROWS_AS(
+        std::make_shared<Appender<>>(
+            location, 3,
+            AppenderOptions{.populate = SegmentPopulate::Background,
+                            .warmup_segments = 0}),
+        std::invalid_argument);
+  }
+
+  SECTION("lock_pages is rejected with Lazy populate") {
+    REQUIRE_THROWS_AS(std::make_shared<Appender<>>(
+                          location, 3,
+                          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                          .lock_pages = true}),
+                      std::invalid_argument);
   }
 }
 
@@ -120,7 +147,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender construction",
 TEST_CASE_METHOD(AppenderFixture, "Appender basic writes",
                  "[appender][write]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 0, AppenderOptions{.prefault = true});
+      location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   SECTION("Can write single message") {
     TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.5, 1000, 'B'};
@@ -159,7 +186,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender basic writes",
 TEST_CASE_METHOD(AppenderFixture, "Appender sequence tracking",
                  "[appender][sequence]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 0, AppenderOptions{.prefault = true});
+      location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   SECTION("Sequence starts at 0") {
     REQUIRE(appender->getCurrentSequence() == 0);
@@ -189,8 +216,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender sequence tracking",
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
     // Read back and verify sequences
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     uint32_t expected_seq = 0;
@@ -213,7 +240,7 @@ TEST_CASE_METHOD(AppenderFixture,
                  "Appender stores logical length with 64-byte frame stride",
                  "[appender][frame-layout][v2]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 7, AppenderOptions{.prefault = true});
+      location, 7, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   for (int i = 0; i < 4; ++i) {
     SmallTrade28 trade{static_cast<int64_t>(i),
@@ -226,8 +253,8 @@ TEST_CASE_METHOD(AppenderFixture,
   appender.reset();
   std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-  auto cursor =
-      std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+  auto cursor = std::make_shared<MergingCursor>(
+      MergingCursorOptions{.populate = SegmentPopulate::Inline});
   cursor->join(location, 7, 0);
 
   constexpr std::size_t expected_logical_length =
@@ -267,7 +294,7 @@ TEST_CASE_METHOD(AppenderFixture,
 
 TEST_CASE_METHOD(AppenderFixture, "Appender with flags", "[appender][flags]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 0, AppenderOptions{.prefault = true});
+      location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   SECTION("Can write with high priority flag") {
     TestTrade trade{revobase::Timestamp::now().nsec(), 1, 100.0, 1000, 'B'};
@@ -284,8 +311,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with flags", "[appender][flags]") {
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     if (cursor->isDataAvailable()) {
@@ -302,12 +329,13 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with flags", "[appender][flags]") {
 TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
                  "[appender][AppenderWarmer]") {
   SECTION("appender with AppenderWarmer doesn't crash") {
-    auto appender = std::make_shared<Appender<>>(location, 0,
-                                                 AppenderOptions{
-                                                     .prefault = false,
-                                                     .warmup_segments = 2,
-                                                     .warmer_cpu_core = -1,
-                                                 });
+    auto appender = std::make_shared<Appender<>>(
+        location, 0,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 2,
+            .warmer_cpu_core = -1,
+        });
 
     REQUIRE(appender != nullptr);
 
@@ -325,12 +353,13 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
 
   SECTION("AppenderWarmer initialization safety") {
     // Create appender with AppenderWarmer
-    auto appender = std::make_shared<Appender<>>(location, 0,
-                                                 AppenderOptions{
-                                                     .prefault = false,
-                                                     .warmup_segments = 2,
-                                                     .warmer_cpu_core = -1,
-                                                 });
+    auto appender = std::make_shared<Appender<>>(
+        location, 0,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 2,
+            .warmer_cpu_core = -1,
+        });
 
     // Wait for initial segment to be created and warmer to initialize
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -362,7 +391,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
     auto start1 = std::chrono::high_resolution_clock::now();
     {
       auto appender = std::make_shared<Appender<>>(
-          location, 3, AppenderOptions{.prefault = true}); // No warmer
+          location, 3,
+          AppenderOptions{.populate = SegmentPopulate::Inline}); // No warmer
 
       // Wait for initialization
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -387,12 +417,13 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
     const int NUM_MESSAGES = 50000;
     auto start2 = std::chrono::high_resolution_clock::now();
     {
-      auto appender = std::make_shared<Appender<>>(location, 1,
-                                                   AppenderOptions{
-                                                       .prefault = false,
-                                                       .warmup_segments = 2,
-                                                       .warmer_cpu_core = -1,
-                                                   }); // With warmer
+      auto appender = std::make_shared<Appender<>>(
+          location, 1,
+          AppenderOptions{
+              .populate = SegmentPopulate::Background,
+              .warmup_segments = 2,
+              .warmer_cpu_core = -1,
+          }); // With warmer
 
       // Wait for initialization and first warmup
       std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -422,12 +453,13 @@ TEST_CASE_METHOD(AppenderFixture, "Appender with AppenderWarmer",
 
 TEST_CASE_METHOD(AppenderFixture, "Appender performance",
                  "[appender][perf][!benchmark]") {
-  auto appender = std::make_shared<Appender<>>(location, 0,
-                                               AppenderOptions{
-                                                   .prefault = false,
-                                                   .warmup_segments = 2,
-                                                   .warmer_cpu_core = -1,
-                                               });
+  auto appender =
+      std::make_shared<Appender<>>(location, 0,
+                                   AppenderOptions{
+                                       .populate = SegmentPopulate::Background,
+                                       .warmup_segments = 2,
+                                       .warmer_cpu_core = -1,
+                                   });
 
   // Wait for initialization
   std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -478,7 +510,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender thread safety",
       auto appender =
           std::make_shared<Appender<>>(location, 0,
                                        AppenderOptions{
-                                           .prefault = false,
+                                           .populate = SegmentPopulate::Lazy,
                                            .background_threads = true,
                                            .retained_segment_limit = 0,
                                        });
@@ -500,8 +532,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender thread safety",
     // Read back every frame and verify the sequence stream is contiguous.
     // SegmentEnd frames are visible and carry their own sequence numbers, so
     // sequences are strictly seq[i] == seq[i-1] + 1 across segment boundaries.
-    auto cursor = std::make_shared<MergingCursor>(
-        MergingCursorOptions{.prefault = true, .background_threads = false});
+    auto cursor = std::make_shared<MergingCursor>(MergingCursorOptions{
+        .populate = SegmentPopulate::Lazy, .background_threads = false});
     cursor->join(location, 0, 0);
     int64_t prev_seq = -1;
     uint64_t data_frames = 0;
@@ -523,7 +555,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender thread safety",
 
 TEST_CASE_METHOD(AppenderFixture, "Appender edge cases", "[appender][edge]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 0, AppenderOptions{.prefault = true});
+      location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   SECTION("Can write zero-sized struct") {
     struct Empty {};
@@ -569,7 +601,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender write-read consistency",
   SECTION("All written messages can be read back") {
     {
       auto appender = std::make_shared<Appender<>>(
-          location, 0, AppenderOptions{.prefault = false});
+          location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       for (int i = 0; i < NUM_MESSAGES; ++i) {
         TestTrade trade{revobase::Timestamp::now().nsec(),
@@ -583,8 +615,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender write-read consistency",
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Read back
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     int count = 0;
@@ -611,7 +643,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender write-read consistency",
 TEST_CASE_METHOD(AppenderFixture, "Appender mark operations",
                  "[appender][mark]") {
   auto appender = std::make_shared<Appender<>>(
-      location, 0, AppenderOptions{.prefault = true});
+      location, 0, AppenderOptions{.populate = SegmentPopulate::Inline});
 
   SECTION("Can write session markers") {
     appender->mark(revobase::Timestamp::now().nsec(), MsgType::SessionStart);
@@ -630,8 +662,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender mark operations",
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     if (cursor->isDataAvailable()) {
@@ -693,7 +725,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("No gaps in sequence across multiple segments") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = false});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Write enough to span multiple segments (4MB default)
     const int NUM_MESSAGES = 50000;
@@ -714,8 +746,8 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Read back and verify NO gaps
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     uint32_t expected_seq = 0;
@@ -764,7 +796,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("No frames span segment boundaries") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = false});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Calculate approximate segment size
     size_t segment_size = findSegmentSize(location, 0);
@@ -799,7 +831,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("Segment header updated correctly on rotation") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = false});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Write to fill first segment
     size_t segment_size = findSegmentSize(location, 0);
@@ -820,7 +852,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Check segment 1 header
-    auto segment1 = Segment::load(location, 0, 1, false, true);
+    auto segment1 = Segment::load(location, 0, 1, false);
 
     REQUIRE(segment1->getSegmentId() == 1);
     // Verify last_frame_position is set
@@ -829,7 +861,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     // Check segment 2 exists and has data
     auto segment_files = location->locator->listSegmentId(location, 0);
     if (segment_files.size() >= 2) {
-      auto segment2 = Segment::load(location, 0, 2, false, true);
+      auto segment2 = Segment::load(location, 0, 2, false);
       REQUIRE(segment2->getSegmentId() == 2);
     }
   }
@@ -847,7 +879,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("Mix of small and large frames") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = false});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     struct SmallMsg {
       uint32_t id;
@@ -875,8 +907,8 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Read back and verify
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     int count = 0;
@@ -910,7 +942,7 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("Multiple threads writing during rotation") {
     auto appender = std::make_shared<Appender<MultiAppenderPolicy>>(
-        location, 0, AppenderOptions{.prefault = false});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     std::atomic<int> total_written{0};
     std::vector<std::thread> threads;
@@ -940,8 +972,8 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Verify all messages readable
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor->join(location, 0, 0);
 
     int count = 0;
@@ -969,12 +1001,13 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
   SECTION("Compare with and without AppenderWarmer") {
     // Write with AppenderWarmer
     {
-      auto appender = std::make_shared<Appender<>>(location, 0,
-                                                   AppenderOptions{
-                                                       .prefault = false,
-                                                       .warmup_segments = 2,
-                                                       .warmer_cpu_core = -1,
-                                                   });
+      auto appender = std::make_shared<Appender<>>(
+          location, 0,
+          AppenderOptions{
+              .populate = SegmentPopulate::Background,
+              .warmup_segments = 2,
+              .warmer_cpu_core = -1,
+          });
 
       for (int i = 0; i < 1000; ++i) {
         TestMsg msg;
@@ -987,8 +1020,8 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Read back
-    auto cursor1 =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor1 = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor1->join(location, 0, 0);
 
     std::vector<uint32_t> seqs1;
@@ -1005,7 +1038,9 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     // Write without AppenderWarmer
     {
       auto appender = std::make_shared<Appender<>>(
-          location, 1, AppenderOptions{.prefault = true}); // Different dest_id
+          location, 1,
+          AppenderOptions{.populate =
+                              SegmentPopulate::Inline}); // Different dest_id
 
       for (int i = 0; i < 1000; ++i) {
         TestMsg msg;
@@ -1018,8 +1053,8 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Read back
-    auto cursor2 =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+    auto cursor2 = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
     cursor2->join(location, 1, 0);
 
     std::vector<uint32_t> seqs2;
@@ -1051,9 +1086,9 @@ TEST_CASE_METHOD(appenderBugHuntFixture,
 
   SECTION("Concurrent appender and cursor") {
     auto appender = std::make_shared<Appender<>>(
-        location, 0, AppenderOptions{.prefault = false});
-    auto cursor =
-        std::make_shared<MergingCursor>(MergingCursorOptions{.prefault = true});
+        location, 0, AppenderOptions{.populate = SegmentPopulate::Lazy});
+    auto cursor = std::make_shared<MergingCursor>(
+        MergingCursorOptions{.populate = SegmentPopulate::Inline});
 
     std::atomic<bool> appender_done{false};
     std::atomic<int> messages_written{0};
@@ -1126,7 +1161,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
   auto makeappender = [&]() {
     return std::make_shared<Appender<>>(
         location, 0,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
   };
 
   SECTION("Rotated segment isFull() and last_frame_position is within bounds") {
@@ -1139,8 +1175,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
     REQUIRE(appender->getCurrentSegmentId() == 2);
     appender.reset();
 
-    auto old_segment = Segment::load(location, 0, 1, /*is_writing=*/false,
-                                     /*prefault=*/false);
+    auto old_segment = Segment::load(location, 0, 1, /*is_writing=*/false);
     REQUIRE(old_segment->isFull());
     REQUIRE(old_segment->lastFrameAddress() >=
             old_segment->firstFrameAddress());
@@ -1158,7 +1193,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
     REQUIRE(appender->getCurrentSegmentId() == 2);
     appender.reset();
 
-    auto old_segment = Segment::load(location, 0, 1, false, false);
+    auto old_segment = Segment::load(location, 0, 1, false);
     uintptr_t addr = old_segment->firstFrameAddress();
     uintptr_t segment_end =
         old_segment->address() + old_segment->getSegmentSize();
@@ -1189,7 +1224,7 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
     REQUIRE(appender->getCurrentSegmentId() == 2);
     appender.reset();
 
-    auto new_segment = Segment::load(location, 0, 2, false, false);
+    auto new_segment = Segment::load(location, 0, 2, false);
     REQUIRE(new_segment->getSegmentSize() == segment_size);
     // segment_header_length must equal sizeof(SegmentHeader) so the first frame
     // sits immediately after the header with no gap.
@@ -1212,8 +1247,8 @@ TEST_CASE_METHOD(AppenderFixture, "Appender segment rotation invariants",
     REQUIRE(appender->getCurrentSequence() == N_TWO + rotations);
     appender.reset();
 
-    auto cursor = std::make_shared<MergingCursor>(
-        MergingCursorOptions{.prefault = true, .background_threads = false});
+    auto cursor = std::make_shared<MergingCursor>(MergingCursorOptions{
+        .populate = SegmentPopulate::Lazy, .background_threads = false});
     cursor->join(location, 0, 0);
     int64_t prev_seq = -1;
     uint64_t data_count = 0;

@@ -104,9 +104,9 @@ Result runCase(std::uint64_t messages, std::size_t payload_bytes) {
   auto locator = std::make_shared<Locator>(dir.string());
   auto location = Location::make(Mode::LIVE, Category::EXECUTION, "bench",
                                  "write-throughput", locator);
-  Appender<> appender(
-      location, kDestId,
-      AppenderOptions{.prefault = false, .background_threads = false});
+  Appender<> appender(location, kDestId,
+                      AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                      .background_threads = false});
 
   std::vector<std::byte> payload(payload_bytes);
   for (std::size_t i = 0; i < payload.size(); ++i)

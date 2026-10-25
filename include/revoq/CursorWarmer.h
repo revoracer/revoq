@@ -46,17 +46,19 @@ struct CursorWarmerStats {
 // time.
 //
 // Distinct subsystem from AppenderWarmer (appender): single-slot (not a ring),
-// read-only mmap, deliberately NO mlock, and it waits on the appender to create
-// the file and publish a valid segment header before mapping. Running the loop
-// at SCHED_FIFO 20 ensures MADV_POPULATE_READ for a full segment completes well
-// within the ~1.455s rotation period, so the warmed segment is always ready
-// before the cursor needs it.
+// read-only mmap, mlock only on request (lock_pages), and it waits on the
+// appender to create the file and publish a valid segment header before
+// mapping. Running the loop at SCHED_FIFO 20 ensures MADV_POPULATE_READ for a
+// full segment completes well within the ~1.455s rotation period, so the warmed
+// segment is always ready before the cursor needs it.
 class CursorWarmer {
 public:
   CursorWarmer(LocationPtr location, std::uint32_t dest_id,
-               std::uint32_t segment_size, int warmer_timeout_ms)
+               std::uint32_t segment_size, int warmer_timeout_ms,
+               bool lock_pages = false)
       : location_(std::move(location)), dest_id_(dest_id),
-        segment_size_(segment_size), warmer_timeout_ms_(warmer_timeout_ms) {}
+        segment_size_(segment_size), warmer_timeout_ms_(warmer_timeout_ms),
+        lock_pages_(lock_pages) {}
 
   // stop() already joins the thread and releases any unclaimed warmed segment.
   ~CursorWarmer() { stop(); }
@@ -151,9 +153,9 @@ public:
 #endif
     if (warmer_ready_id_ == segment_id && warmer_addr_ != 0) {
       try {
-        // prefault=false: ~Segment() calls only munmap (no munlock).
+        // ~Segment() munlocks only if the warmer locked the mapping.
         new_segment = Segment::loadFromAddress(location_, dest_id_, segment_id,
-                                               warmer_addr_, false);
+                                               warmer_addr_, lock_pages_);
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         stat_warmer_hits_.fetch_add(1, std::memory_order_relaxed);
         if (warmer_ready_ns_ != 0 && need_ns >= warmer_ready_ns_)
@@ -170,8 +172,9 @@ public:
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
         stat_warmer_invalid_.fetch_add(1, std::memory_order_relaxed);
 #endif
-        revobase::os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_, false,
-                                          revobase::os::MsyncMode::NONE);
+        revobase::os::MmapBuffer::releaseMmapBuffer(
+            warmer_addr_, segment_size_, lock_pages_,
+            revobase::os::MsyncMode::NONE);
         warmer_addr_ = 0;
         warmer_ready_id_ = -1;
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
@@ -263,6 +266,8 @@ private:
   const std::uint32_t dest_id_;
   const std::uint32_t segment_size_;
   const int warmer_timeout_ms_;
+  // mlock warmed segments (in this thread, off the cursor hot path).
+  const bool lock_pages_;
 
   // Own shutdown flag — the warmer no longer shares Stream's retire_running_.
   std::atomic<bool> running_{false};
@@ -529,9 +534,25 @@ private:
             goto next_signal;
           }
         }
-        // Do not mlock cursor mappings. mlock(128MB) added ~20ms at rotation,
-        // while this warmer only needs to establish PTEs ahead of time. HugeTLB
-        // segments are already unswappable.
+        // Note:
+        // Page tables belong to the process, so PTEs the warmer thread builds are
+        // used by the cursor thread too. The TLB, though, is per core, and the warmer
+        // runs on a different core. So the cursor's core still takes a TLB miss on its
+        // first touch of each page. That's a hardware walk(<100 ns),
+        // much cheaper than a fault.
+
+        // Unmapping can disturb other cores. When a mapping is removed
+        // (the retire thread's munmap), other cores may still cache translations
+        // for it in their TLBs. The kernel sends them an interrupt to flush those
+        // entries, which is called a TLB shootdown. So even an munmap on a
+        // housekeeping thread can briefly interrupt the cursor's core.
+        // Doing retire off the hot thread avoids the cost of the munmap itself,
+        // but not necessarily that interrupt.
+
+        // mlock only on request (lock_pages): removing faults only needs the PTEs,
+        // while mlock(128MB) costs ~20ms. That cost runs on this thread, but mlock
+        // briefly takes the mmap lock, which can delay page faults on other threads.
+        // HugeTLB segments are already unswappable.
 
         // Establish all PTEs now, ~1.455s before the cursor needs them. After
         // this call the cursor hot path incurs only a TLB miss (~100 ns) per
@@ -542,7 +563,9 @@ private:
         try {
           revobase::os::MmapBuffer::prepareReadOnlyMmapBuffer(
               path_str, addr, segment_size_,
-              {.populate_read = true, .advise_hugepage = true});
+              {.populate_read = true,
+               .advise_hugepage = true,
+               .lock_pages = lock_pages_});
         } catch (const revobase::os::MmapError &) {
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
           stat_warmer_populate_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -564,13 +587,15 @@ private:
             if (warmer_pending_)
               stat_warmer_superseded_.fetch_add(1, std::memory_order_relaxed);
 #endif
-            revobase::os::MmapBuffer::releaseMmapBuffer(addr, segment_size_, false,
-                                              revobase::os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                addr, segment_size_, lock_pages_,
+                revobase::os::MsyncMode::NONE);
             goto next_signal;
           }
           if (warmer_addr_ != 0)
-            revobase::os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_,
-                                              false, revobase::os::MsyncMode::NONE);
+            revobase::os::MmapBuffer::releaseMmapBuffer(
+                warmer_addr_, segment_size_, lock_pages_,
+                revobase::os::MsyncMode::NONE);
           warmer_addr_ = addr;
           warmer_ready_id_ = segment_to_warm;
 #ifdef REVOQ_ENABLE_DIAGNOSTICS
@@ -605,8 +630,9 @@ private:
 
   void releaseWarmedSegment() {
     if (warmer_addr_ != 0) {
-      revobase::os::MmapBuffer::releaseMmapBuffer(warmer_addr_, segment_size_, false,
-                                        revobase::os::MsyncMode::NONE);
+      revobase::os::MmapBuffer::releaseMmapBuffer(
+          warmer_addr_, segment_size_, lock_pages_,
+          revobase::os::MsyncMode::NONE);
       warmer_addr_ = 0;
       warmer_ready_id_ = -1;
 #ifdef REVOQ_ENABLE_DIAGNOSTICS

@@ -49,9 +49,9 @@ TEST_CASE("Cross-process cursor visibility", "[multiprocess]") {
     // address-space copy has no dangling thread handles or locked mutexes.
     // The constructor calls loadInitialSegment(), creating segment 1 on disk
     // with a valid header before we fork, so the child can safely join.
-    Appender<> appender(
-        location, DEST_ID,
-        AppenderOptions{.prefault = false, .background_threads = false});
+    Appender<> appender(location, DEST_ID,
+                        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                        .background_threads = false});
 
     int ready_pipe[2];
     REQUIRE(pipe(ready_pipe) == 0);
@@ -66,8 +66,8 @@ TEST_CASE("Cross-process cursor visibility", "[multiprocess]") {
       // No background threads in the child: keeps the child single-threaded
       // and avoids any interaction with the inherited (but dead) parent
       // threads.
-      MergingCursor cursor(
-          MergingCursorOptions{.prefault = false, .background_threads = false});
+      MergingCursor cursor(MergingCursorOptions{
+          .populate = SegmentPopulate::Lazy, .background_threads = false});
       cursor.join(location, DEST_ID, 0);
 
       // Signal parent: cursor is joined and positioned at the start of

@@ -7,7 +7,9 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <type_traits>
 
@@ -88,17 +90,29 @@ struct FillerMessage {
   uint32_t id;
 };
 
-// Create a prefault appender and publish `count` filler trades, then let the
-// appender fall out of scope so the resulting segment file(s) persist on disk
-// for a cursor/warmer to map. A handful of frames stays well within segment 1.
+// Create an Inline-populated appender and publish `count` filler trades, then
+// let the appender fall out of scope so the resulting segment file(s) persist
+// on disk for a cursor/warmer to map. A handful of frames stays well within
+// segment 1.
 inline void writeFillerSegment(const LocationPtr &location, uint32_t dest_id,
                                int count = 8) {
   auto appender = std::make_shared<Appender<>>(
-      location, dest_id, AppenderOptions{.prefault = true});
+      location, dest_id, AppenderOptions{.populate = SegmentPopulate::Inline});
   const int64_t base = revobase::Timestamp::now().nsec();
   for (int i = 0; i < count; ++i) {
     const FillerMessage m{base + i, static_cast<uint32_t>(i)};
     publish(*appender, m.ts, kTagA, m);
   }
+}
+
+// Locked memory of this process (VmLck), in kB. Linux only; 0 elsewhere.
+inline std::size_t lockedKb() {
+  std::ifstream status("/proc/self/status");
+  std::string line;
+  while (std::getline(status, line)) {
+    if (line.rfind("VmLck:", 0) == 0)
+      return std::stoul(line.substr(6));
+  }
+  return 0;
 }
 } // namespace revoq::test

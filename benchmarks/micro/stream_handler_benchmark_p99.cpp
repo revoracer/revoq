@@ -759,7 +759,7 @@ void applyTunedSetup(const BenchmarkConfig &cfg, BenchmarkRole role) {
 AppenderOptions appenderOptions(const BenchmarkConfig &cfg) {
   if (!cfg.tuned) {
     return AppenderOptions{
-        .prefault = false,
+        .populate = SegmentPopulate::Lazy,
         .warmup_segments = 0,
         .warmer_cpu_core = -1,
         .background_threads = false,
@@ -768,7 +768,8 @@ AppenderOptions appenderOptions(const BenchmarkConfig &cfg) {
   }
 
   return AppenderOptions{
-      .prefault = true,
+      .populate = SegmentPopulate::Background,
+      .lock_pages = true,
       .warmup_segments = kTunedAppenderWarmupSegments,
       .warmer_cpu_core = cfg.appender_warmer_cpu,
       .background_threads = true,
@@ -779,7 +780,7 @@ AppenderOptions appenderOptions(const BenchmarkConfig &cfg) {
 MergingCursorOptions cursorOptions(const BenchmarkConfig &cfg) {
   if (!cfg.tuned) {
     return MergingCursorOptions{
-        .prefault = false,
+        .populate = SegmentPopulate::Lazy,
         .background_threads = false,
         .retained_segment_limit = 0,
         .warmer_timeout_ms = 0,
@@ -788,7 +789,7 @@ MergingCursorOptions cursorOptions(const BenchmarkConfig &cfg) {
   }
 
   return MergingCursorOptions{
-      .prefault = false,
+      .populate = SegmentPopulate::Background,
       .background_threads = true,
       .retained_segment_limit = 0,
       .warmer_timeout_ms = 5000,

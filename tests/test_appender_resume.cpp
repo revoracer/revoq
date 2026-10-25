@@ -54,7 +54,8 @@ TEST_CASE("Appender basic write and read", "[stream][appender][basic]") {
   SECTION("Write some frames and verify") {
     // Create appender without AppenderWarmer for simplicity
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
 
     // Write some test data
     TestData data1{100, 123.45, "AAPL"};
@@ -80,7 +81,7 @@ TEST_CASE("Appender resume after restart", "[stream][appender][resume]") {
 
   SECTION("First run - write initial data") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Write 100 frames
     for (int i = 0; i < 100; ++i) {
@@ -104,7 +105,7 @@ TEST_CASE("Appender resume after restart", "[stream][appender][resume]") {
   SECTION("Second run - resume and continue") {
     // Create new appender with resume enabled
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Should have resumed from previous state
     uint32_t resumed_seq = appender->getCurrentSequence();
@@ -138,7 +139,7 @@ TEST_CASE("Appender resume with multiple segments",
 
   SECTION("Write many frames to trigger segment rotation") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
     for (int i = 0; i < FRAMES_PER_TEST; ++i) {
       TestData data{i, static_cast<double>(i), "SYMB"};
       publish(*appender, i * 1'000'000, kTagA, data);
@@ -167,7 +168,7 @@ TEST_CASE("Appender resume with multiple segments",
 
     // Resume and verify
     auto appender2 = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     REQUIRE(appender2->getCurrentSequence() == final_seq);
     REQUIRE(appender2->getCurrentSegmentId() == final_segment);
@@ -182,7 +183,7 @@ TEST_CASE("Appender resume from empty stream",
 
   // Create appender with resume=true on empty directory
   auto appender = std::make_shared<Appender<>>(
-      location, dest_id, AppenderOptions{.prefault = false});
+      location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
   // Should start from segment 1, sequence 0
   REQUIRE(appender->getCurrentSegmentId() == 1);
@@ -202,12 +203,13 @@ TEST_CASE("Appender with AppenderWarmer resume",
   uint32_t dest_id = 0x12345678;
 
   SECTION("First run with AppenderWarmer") {
-    auto appender = std::make_shared<Appender<>>(location, dest_id,
-                                                 AppenderOptions{
-                                                     .prefault = false,
-                                                     .warmup_segments = 4,
-                                                     .warmer_cpu_core = -1,
-                                                 });
+    auto appender = std::make_shared<Appender<>>(
+        location, dest_id,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 4,
+            .warmer_cpu_core = -1,
+        });
 
     // Write data
     for (int i = 0; i < 1005; ++i) {
@@ -227,12 +229,13 @@ TEST_CASE("Appender with AppenderWarmer resume",
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
     // Resume with AppenderWarmer
-    auto appender2 = std::make_shared<Appender<>>(location, dest_id,
-                                                  AppenderOptions{
-                                                      .prefault = false,
-                                                      .warmup_segments = 4,
-                                                      .warmer_cpu_core = -1,
-                                                  });
+    auto appender2 = std::make_shared<Appender<>>(
+        location, dest_id,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 4,
+            .warmer_cpu_core = -1,
+        });
     SPDLOG_INFO("After resume: seq={}, segment={}",
                 appender2->getCurrentSequence(),
                 appender2->getCurrentSegmentId());
@@ -256,7 +259,7 @@ TEST_CASE("Appender resume vs no-resume behavior",
 
   SECTION("Setup: Write initial data") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     for (int i = 0; i < 100; ++i) {
       TestData data{i, static_cast<double>(i), "INIT"};
@@ -268,8 +271,8 @@ TEST_CASE("Appender resume vs no-resume behavior",
     //  }
     //
     //  SECTION("With resume=true, should continue") {
-    appender = std::make_shared<Appender<>>(location, dest_id,
-                                            AppenderOptions{.prefault = false});
+    appender = std::make_shared<Appender<>>(
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Should have sequence 101 (continuing from 100)
     uint32_t seq_before = appender->getCurrentSequence();
@@ -297,7 +300,8 @@ TEST_CASE("Appender sequence number continuity",
     // Cycle 1
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i, static_cast<double>(i), "CYC1"};
@@ -310,7 +314,8 @@ TEST_CASE("Appender sequence number continuity",
     // Cycle 2
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i + 100, static_cast<double>(i + 100), "CYC2"};
@@ -322,7 +327,8 @@ TEST_CASE("Appender sequence number continuity",
     // Cycle 3
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       for (int i = 0; i < 50; ++i) {
         TestData data{i + 200, static_cast<double>(i + 200), "CYC3"};
@@ -350,7 +356,8 @@ TEST_CASE("Appender marker frames with resume",
   SECTION("Write markers and data, then resume") {
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       appender->mark(1000000, MsgType::SessionStart);
 
@@ -367,7 +374,8 @@ TEST_CASE("Appender marker frames with resume",
 
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       REQUIRE(appender->getCurrentSequence() == 12); // Continue from 12
 
@@ -392,8 +400,7 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
     fs::create_directories(segment1.parent_path());
     std::ofstream(segment1.string()).close();
 
-    REQUIRE_THROWS_AS(Segment::load(location, dest_id, 1, false, false),
-                      RevoqError);
+    REQUIRE_THROWS_AS(Segment::load(location, dest_id, 1, false), RevoqError);
   }
 
   SECTION("Read-only load rejects full-size uninitialized segment") {
@@ -401,15 +408,15 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
     std::ofstream(segment1.string()).close();
     fs::resize_file(segment1, findSegmentSize(location, dest_id));
 
-    REQUIRE_THROWS_AS(Segment::load(location, dest_id, 1, false, false),
-                      RevoqError);
+    REQUIRE_THROWS_AS(Segment::load(location, dest_id, 1, false), RevoqError);
   }
 
   SECTION("Missing next segment after SegmentEnd is not created by cursor") {
     {
       auto appender = std::make_shared<Appender<>>(
           location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                          .background_threads = false});
       TestData data{1, 1.0, "MISS"};
       publish(*appender, 1'000'000, kTagA, data);
       appender->mark(2'000'000, MsgType::SegmentEnd);
@@ -418,8 +425,8 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
     const auto segment2 = Segment::segmentPath(location, dest_id, 2);
     REQUIRE_FALSE(fs::exists(segment2));
 
-    MergingCursor cursor(
-        MergingCursorOptions{.prefault = false, .background_threads = false});
+    MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                              .background_threads = false});
     cursor.join(location, dest_id, 0);
 
     REQUIRE(cursor.isDataAvailable());
@@ -437,15 +444,16 @@ TEST_CASE("MergingCursor handles segment boundary edge cases",
     {
       auto appender = std::make_shared<Appender<>>(
           location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                          .background_threads = false});
       TestData data{1, 1.0, "EMTY"};
       publish(*appender, 1'000'000, kTagA, data);
       appender->mark(2'000'000, MsgType::SegmentEnd);
     }
-    Segment::load(location, dest_id, 2, true, false);
+    Segment::load(location, dest_id, 2, true);
 
-    MergingCursor cursor(
-        MergingCursorOptions{.prefault = false, .background_threads = false});
+    MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                              .background_threads = false});
     cursor.join(location, dest_id, 0);
 
     int count = 0;
@@ -468,15 +476,16 @@ TEST_CASE("MergingCursor segment rotation does not scan directory",
   {
     auto appender = std::make_shared<Appender<>>(
         location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
     TestData data{1, 1.0, "FAST"};
     publish(*appender, 1'000'000, kTagA, data);
     appender->mark(2'000'000, MsgType::SegmentEnd);
   }
-  Segment::load(location, dest_id, 2, true, false);
+  Segment::load(location, dest_id, 2, true);
 
-  MergingCursor cursor(
-      MergingCursorOptions{.prefault = false, .background_threads = false});
+  MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                            .background_threads = false});
   cursor.join(location, dest_id, 0);
   locator->list_segment_id_calls = 0;
 
@@ -501,7 +510,8 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
   {
     auto appender = std::make_shared<Appender<>>(
         location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
     appender->mark(1'000'000, MsgType::SessionStart);
     TestData first{1, 1.0, "R1"};
     publish(*appender, 2'000'000, kTagA, first);
@@ -512,7 +522,8 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
   {
     auto appender = std::make_shared<Appender<>>(
         location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
     REQUIRE(appender->getCurrentSequence() == 3);
     REQUIRE(appender->getCurrentSegmentId() == 1);
     appender->mark(4'000'000, MsgType::SessionStart);
@@ -522,8 +533,8 @@ TEST_CASE("Appender resume appends to previous segment for cursors",
     REQUIRE(appender->getCurrentSequence() == 6);
   }
 
-  MergingCursor cursor(
-      MergingCursorOptions{.prefault = false, .background_threads = false});
+  MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                            .background_threads = false});
   cursor.join(location, dest_id, 0);
 
   uint64_t expected_seq = 0;
@@ -570,7 +581,8 @@ TEST_CASE("Appender resumes after SegmentEnd on next segment",
   {
     auto appender = std::make_shared<Appender<>>(
         location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
     TestData data{1, 1.0, "PEND"};
     publish(*appender, 1'000'000, kTagA, data);
     appender->mark(2'000'000, MsgType::SegmentEnd);
@@ -580,7 +592,8 @@ TEST_CASE("Appender resumes after SegmentEnd on next segment",
 
   auto appender = std::make_shared<Appender<>>(
       location, dest_id,
-      AppenderOptions{.prefault = false, .background_threads = false});
+      AppenderOptions{.populate = SegmentPopulate::Lazy,
+                      .background_threads = false});
   REQUIRE(appender->getCurrentSequence() == 2);
   REQUIRE(appender->getCurrentSegmentId() == 2);
 }
@@ -594,7 +607,8 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
     // Write some data
     {
       auto appender = std::make_shared<Appender<>>(
-          location, dest_id, AppenderOptions{.prefault = false});
+          location, dest_id,
+          AppenderOptions{.populate = SegmentPopulate::Lazy});
 
       for (int i = 0; i < 100; ++i) {
         TestData data{i, static_cast<double>(i), "EDGE"};
@@ -607,7 +621,7 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
 
     // Try to resume - should handle gracefully
     REQUIRE_NOTHROW(std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false}));
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy}));
   }
 
   SECTION("Crash mid-frame: incomplete frame does not corrupt resume") {
@@ -620,7 +634,8 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
     {
       auto appender = std::make_shared<Appender<>>(
           location, dest_id,
-          AppenderOptions{.prefault = false, .background_threads = false});
+          AppenderOptions{.populate = SegmentPopulate::Lazy,
+                          .background_threads = false});
       for (int i = 0; i < N; ++i) {
         TestData data{i, static_cast<double>(i), "CRSH"};
         publish(*appender, i * 1'000'000, kTagA, data);
@@ -640,7 +655,8 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
     // with the next committed frame at sequence N.
     auto appender2 = std::make_shared<Appender<>>(
         location, dest_id,
-        AppenderOptions{.prefault = false, .background_threads = false});
+        AppenderOptions{.populate = SegmentPopulate::Lazy,
+                        .background_threads = false});
     REQUIRE(static_cast<int>(appender2->getCurrentSequence()) == N);
     REQUIRE(appender2->getCurrentSegmentId() == 1);
 
@@ -652,8 +668,8 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
     // cursor joined at segment 1 sees N committed frames and the continued
     // frame.
     appender2.reset();
-    auto cursor = std::make_shared<MergingCursor>(
-        MergingCursorOptions{.prefault = true, .background_threads = false});
+    auto cursor = std::make_shared<MergingCursor>(MergingCursorOptions{
+        .populate = SegmentPopulate::Lazy, .background_threads = false});
     cursor->join(location, dest_id, 0);
     int count = 0;
     while (cursor->isDataAvailable()) {
@@ -665,7 +681,7 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
 
   SECTION("Very large sequence numbers") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     // Simulate very large sequence by writing many frames
     for (int i = 0; i < 1000; ++i) {
@@ -681,7 +697,7 @@ TEST_CASE("Appender edge cases", "[stream][appender][edge]") {
 
     // Resume should handle large sequences
     auto appender2 = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     REQUIRE(appender2->getCurrentSequence() == large_seq);
   }
@@ -694,7 +710,7 @@ TEST_CASE("Appender concurrent safety", "[stream][appender][concurrent]") {
 
   SECTION("Multiple writes in sequence") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     const int NUM_WRITES = 1000;
 
@@ -715,7 +731,7 @@ TEST_CASE("Appender performance baseline", "[stream][appender][performance]") {
 
   SECTION("Write performance without warmer") {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = false});
+        location, dest_id, AppenderOptions{.populate = SegmentPopulate::Lazy});
 
     const int NUM_WRITES = 10000;
     auto start = std::chrono::high_resolution_clock::now();
@@ -741,12 +757,13 @@ TEST_CASE("Appender performance baseline", "[stream][appender][performance]") {
   }
 
   SECTION("Write performance with warmer") {
-    auto appender = std::make_shared<Appender<>>(location, dest_id,
-                                                 AppenderOptions{
-                                                     .prefault = false,
-                                                     .warmup_segments = 4,
-                                                     .warmer_cpu_core = -1,
-                                                 });
+    auto appender = std::make_shared<Appender<>>(
+        location, dest_id,
+        AppenderOptions{
+            .populate = SegmentPopulate::Background,
+            .warmup_segments = 4,
+            .warmer_cpu_core = -1,
+        });
 
     const int NUM_WRITES = 10000;
     auto start = std::chrono::high_resolution_clock::now();

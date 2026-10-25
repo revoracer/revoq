@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 RevoRacer
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -47,13 +48,16 @@ struct TinyTrade {
 
 TEST_CASE("MergingCursor typed dispatch invokes registered handlers",
           "[cursor][typed]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 0;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade1{1'000'000, 10, 101.25};
     TypedBBO bbo{2'000'000, 100, 200};
     TypedTrade trade2{3'000'000, 11, 102.50};
@@ -64,7 +68,7 @@ TEST_CASE("MergingCursor typed dispatch invokes registered handlers",
     publish(*appender, trade2.timestamp, TypedTrade::kMsgType, trade2);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
 
   std::vector<uint32_t> trade_ids;
@@ -95,13 +99,16 @@ TEST_CASE("MergingCursor typed dispatch invokes registered handlers",
 
 TEST_CASE("MergingCursor typed dispatch skips unknown message types",
           "[cursor][typed]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 1;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade{1'000'000, 42, 99.0};
     TypedBBO bbo{2'000'000, 5, 7};
 
@@ -109,7 +116,7 @@ TEST_CASE("MergingCursor typed dispatch skips unknown message types",
     publish(*appender, bbo.timestamp, TypedBBO::kMsgType, bbo);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
 
   int trade_count = 0;
@@ -133,18 +140,21 @@ TEST_CASE("MergingCursor typed dispatch skips unknown message types",
 
 TEST_CASE("MergingCursor typed dispatch rejects mismatched payload sizes",
           "[cursor][typed]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 2;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TinyTrade tiny{1'000'000, 7};
     publish(*appender, tiny.timestamp, kTagA, tiny);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
   TypedDispatcher dispatcher(cursor);
   dispatcher.on<TypedTrade>([](const TypedTrade &) {});
@@ -154,20 +164,23 @@ TEST_CASE("MergingCursor typed dispatch rejects mismatched payload sizes",
 
 TEST_CASE("TypedDispatcher dispatches and advances one stream",
           "[cursor][typed]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 3;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade{1'000'000, 17, 103.25};
     TypedBBO bbo{2'000'000, 11, 13};
     publish(*appender, trade.timestamp, TypedTrade::kMsgType, trade);
     publish(*appender, bbo.timestamp, TypedBBO::kMsgType, bbo);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
 
   int trade_count = 0;
@@ -199,20 +212,23 @@ TEST_CASE("TypedDispatcher dispatches and advances one stream",
 
 TEST_CASE("MergingCursor static fast path invokes concrete dispatcher",
           "[cursor][typed][static]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 4;
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade{1'000'000, 23, 104.75};
     TypedBBO bbo{2'000'000, 19, 29};
     publish(*appender, trade.timestamp, TypedTrade::kMsgType, trade);
     publish(*appender, bbo.timestamp, TypedBBO::kMsgType, bbo);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
 
   int trade_count = 0;
@@ -241,6 +257,8 @@ TEST_CASE("MergingCursor static fast path invokes concrete dispatcher",
 
 TEST_CASE("MergingCursor static fast path clears its single-stream cache",
           "[cursor][typed][static]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t first_dest_id = 6;
@@ -248,18 +266,20 @@ TEST_CASE("MergingCursor static fast path clears its single-stream cache",
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, first_dest_id, AppenderOptions{.prefault = true});
+        location, first_dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade{2'000'000, 61, 106.25};
     publish(*appender, trade.timestamp, TypedTrade::kMsgType, trade);
   }
   {
     auto appender = std::make_shared<Appender<>>(
-        location, second_dest_id, AppenderOptions{.prefault = true});
+        location, second_dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     TypedTrade trade{1'000'000, 71, 107.25};
     publish(*appender, trade.timestamp, TypedTrade::kMsgType, trade);
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, first_dest_id, 0);
   cursor.join(location, second_dest_id, 0);
 
@@ -278,6 +298,8 @@ TEST_CASE("MergingCursor static fast path clears its single-stream cache",
 
 TEST_CASE("Appender closeData finalizes metadata before publication",
           "[appender][publish][metadata]") {
+  const auto populate = GENERATE(SegmentPopulate::Lazy, SegmentPopulate::Inline,
+                                 SegmentPopulate::Background);
   TempTestDir temp_dir;
   auto location = createTestLocation(temp_dir.string());
   constexpr uint32_t dest_id = 5;
@@ -285,7 +307,8 @@ TEST_CASE("Appender closeData finalizes metadata before publication",
 
   {
     auto appender = std::make_shared<Appender<>>(
-        location, dest_id, AppenderOptions{.prefault = true});
+        location, dest_id,
+        AppenderOptions{.populate = SegmentPopulate::Inline});
     auto &slot =
         appender->openData<TypedTrade>(1'234'567, TypedTrade::kMsgType);
     slot = TypedTrade{1'234'567, 31, 105.50};
@@ -293,7 +316,7 @@ TEST_CASE("Appender closeData finalizes metadata before publication",
         [](FrameHeader &header) { header.event_time = event_time; });
   }
 
-  MergingCursor cursor(MergingCursorOptions{.prefault = true});
+  MergingCursor cursor(MergingCursorOptions{.populate = populate});
   cursor.join(location, dest_id, 0);
   const auto current = cursor.tryCurrentFrame();
   REQUIRE(current);

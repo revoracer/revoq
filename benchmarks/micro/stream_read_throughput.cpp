@@ -103,9 +103,9 @@ struct Result {
 
 void writeStream(const LocationPtr &location, std::uint64_t messages,
                   std::size_t payload_bytes) {
-  Appender<> appender(
-      location, kDestId,
-      AppenderOptions{.prefault = false, .background_threads = false});
+  Appender<> appender(location, kDestId,
+                      AppenderOptions{.populate = SegmentPopulate::Lazy,
+                                      .background_threads = false});
   std::vector<std::byte> payload(payload_bytes);
   for (std::size_t i = 0; i < payload.size(); ++i)
     payload[i] = static_cast<std::byte>(i);
@@ -123,8 +123,8 @@ Result runCase(std::uint64_t messages, std::size_t payload_bytes) {
                                  "read-throughput", locator);
   writeStream(location, messages, payload_bytes);
 
-  MergingCursor cursor(
-      MergingCursorOptions{.prefault = false, .background_threads = false});
+  MergingCursor cursor(MergingCursorOptions{.populate = SegmentPopulate::Lazy,
+                                            .background_threads = false});
   cursor.join(location, kDestId, 0);
 
   std::uint64_t count = 0;
