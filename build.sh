@@ -199,6 +199,22 @@ if [[ -n "${REVOBASE_PATH}" ]]; then
 fi
 git submodule update --init --recursive "${submodules[@]}"
 
+# Fail before CMake runs: a configure with no C++ compiler still writes a cache
+# with empty CMAKE_CXX_FLAGS_<CONFIG>, and a later configure with CXX set keeps
+# them, so a "Release" build silently compiles without -O3 -DNDEBUG.
+if ! command -v "${CXX:-c++}" >/dev/null 2>&1; then
+  echo "C++ compiler not found: ${CXX:-c++}. Set CXX=/path/to/clang++." >&2
+  exit 1
+fi
+# Heal a cache already poisoned that way. CMake's default Debug flags are never
+# empty for GCC/Clang, so an empty value marks a cache configured without a C++
+# compiler.
+cache="${BUILD_DIR}/CMakeCache.txt"
+if [[ -f "${cache}" ]] && grep -qx 'CMAKE_CXX_FLAGS_DEBUG:STRING=' "${cache}"; then
+  echo "Resetting ${BUILD_DIR}: CMake cache has empty C++ flags (configured without a C++ compiler)" >&2
+  rm -rf "${cache}" "${BUILD_DIR}/CMakeFiles"
+fi
+
 cmake_args=(
   -S "${ROOT_DIR}" -B "${BUILD_DIR}"
   -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
